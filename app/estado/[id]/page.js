@@ -12,9 +12,10 @@ export default function EstadoCuenta() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    fetch(`/api/clientes/${id}`)
+    fetch(`/api/estado/${id}`)
       .then(r => r.json())
       .then(d => d.error ? setError(d.error) : setData(d))
+      .catch(() => setError('No se pudo cargar el estado de cuenta'))
   }, [id])
 
   if (error) return (
