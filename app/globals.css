@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  font-size: 16px;
+}
+
+body {
+  font-size: 1rem;
+}
+
+/* Tablas más legibles */
+table {
+  font-size: 0.95rem;
+}
+
+th {
+  font-size: 0.8rem;
+}
+
+/* Inputs más grandes */
+input, select, textarea {
+  font-size: 1rem !important;
+}
+
+/* Labels */
+label {
+  font-size: 0.875rem !important;
+}
+
