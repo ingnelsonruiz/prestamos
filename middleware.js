@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { jwtVerify } from 'jose'
+import { jwtVerify } from 'jose/jwt/verify'
 
 const SECRET  = new TextEncoder().encode(process.env.JWT_SECRET || 'inversiones-tata-linan-secret-2026')
 const COOKIE  = 'itl_session'

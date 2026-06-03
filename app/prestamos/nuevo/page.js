@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { calcularInteresPlano, calcularFrances, convertirTasa } from '@/lib/calculos'
@@ -152,7 +152,7 @@ const init = {
   cuota_inicial:'0', descripcion_bien:'', valor_comercial_bien:'', notas:''
 }
 
-export default function NuevoPrestamo() {
+function NuevoPrestamoContenido() {
   const router         = useRouter()
   const searchParams   = useSearchParams()
   const clientePresel  = searchParams.get('cliente') || ''
@@ -430,5 +430,13 @@ export default function NuevoPrestamo() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function NuevoPrestamo() {
+  return (
+    <Suspense fallback={<div className="p-8 text-gray-400">Cargando...</div>}>
+      <NuevoPrestamoContenido />
+    </Suspense>
   )
 }
