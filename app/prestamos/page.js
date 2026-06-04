@@ -92,6 +92,9 @@ export default function PrestamosPage() {
                           {p.tipo}
                         </span>
                         {p.descripcion_bien && <span className="ml-2 text-xs text-gray-400 italic">{p.descripcion_bien.slice(0,40)}{p.descripcion_bien.length>40?'...':''}</span>}
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          📅 {new Date(p.fecha_creacion).toLocaleDateString('es-CO', {day:'2-digit',month:'short',year:'numeric'})}
+                        </p>
                       </td>
                       <td className="px-4 py-3 text-right text-gray-600 font-medium text-base">{fmt(p.monto_capital)}</td>
                       <td className="px-4 py-3 text-right font-bold text-blue-700 text-lg">{fmt(p.capital_pendiente||0)}</td>

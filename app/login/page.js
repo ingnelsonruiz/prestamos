@@ -31,7 +31,7 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <div className="text-5xl mb-3">💼</div>
           <h1 className="text-2xl font-bold text-white">Inversiones</h1>
-          <p className="text-blue-300 text-lg font-medium">Tata Liñan</p>
+          <p className="text-blue-300 text-lg font-medium">Hnos Liñan</p>
         </div>
 
         {/* Card login */}

@@ -132,7 +132,7 @@ export default function EstadoCuenta() {
       {/* Footer */}
       <div className="text-center pb-8 px-4">
         <p className="text-xs text-gray-400">
-          Consulta generada el {new Date().toLocaleDateString('es-CO')} · Inversiones Tata Liñan
+          Consulta generada el {new Date().toLocaleDateString('es-CO')} · Inversiones Hnos Liñan
         </p>
       </div>
 

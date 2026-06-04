@@ -2,7 +2,7 @@ import './globals.css'
 import LayoutWrapper from '@/components/LayoutWrapper'
 
 export const metadata = {
-  title: 'Inversiones Tata Liñan',
+  title: 'Inversiones Hnos Liñan',
   description: 'Gestión de préstamos, carteras mixtas y empeños',
 }
 

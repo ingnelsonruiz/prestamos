@@ -32,7 +32,7 @@ export default function Sidebar({ onClose }) {
       <div className="p-6 border-b border-blue-800 flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold leading-tight">💼 Inversiones</h1>
-          <p className="text-blue-300 text-sm font-medium">Tata Liñan</p>
+          <p className="text-blue-300 text-sm font-medium">Hnos Liñan</p>
         </div>
         {onClose && (
           <button onClick={onClose} className="text-blue-300 hover:text-white p-1 lg:hidden">
@@ -89,6 +89,10 @@ export default function Sidebar({ onClose }) {
           className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-red-300 hover:bg-red-900/30 hover:text-red-200 transition-colors">
           🚪 Cerrar sesión
         </button>
+        <p className="text-center text-blue-500 text-xs mt-2 leading-tight px-2">
+          Desarrollado por<br/>
+          <span className="text-blue-300 font-medium">Ing. Nelson Javier Ruiz Lozano</span>
+        </p>
       </div>
     </aside>
   )
