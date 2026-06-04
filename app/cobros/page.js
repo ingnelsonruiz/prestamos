@@ -58,9 +58,11 @@ export default function CobrosPage() {
 
   const gruposFiltrados = grupos.filter(g => {
     const q = buscar.toLowerCase()
+    // Filtrar por búsqueda si hay texto
     if (q && !g.nombre_cliente?.toLowerCase().includes(q) && !g.descripcion?.toLowerCase().includes(q)) return false
-    if (filtro === 'mora')  return g.cuotas.some(c => esMora(c))
-    if (filtro === 'hoy')   return g.cuotas.some(c => c.fecha_vencimiento?.split('T')[0] === hoy)
+
+    if (filtro === 'mora') return g.cuotas.some(c => esMora(c))
+    if (filtro === 'hoy')  return g.cuotas.some(c => c.fecha_vencimiento?.split('T')[0] === hoy)
     if (filtro === 'semana') {
       const fin = new Date(hoy); fin.setDate(fin.getDate()+7)
       return g.cuotas.some(c => {
@@ -68,7 +70,8 @@ export default function CobrosPage() {
         return fv >= hoy && fv <= fin.toISOString().split('T')[0]
       })
     }
-    return true
+    // "todas": mostrar solo si hay búsqueda activa
+    return buscar.trim() !== ''
   })
 
   const totalPendiente = gruposFiltrados.reduce((s,g) =>
@@ -128,7 +131,7 @@ export default function CobrosPage() {
               setAbiertos({})
             }
           }} />
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {[
             { k:'todas',  l:'Todas',    desc:'Todas las cuotas pendientes o con abono parcial',
               count: grupos.length },
@@ -144,7 +147,17 @@ export default function CobrosPage() {
               })).length, color:'text-yellow-600' },
           ].map(({k,l,desc,count,color})=>(
             <div key={k} className="relative group">
-              <button onClick={()=>setFiltro(k)}
+              <button onClick={()=>{
+                setFiltro(k)
+                // Auto-abrir acordeones para filtros distintos a "todas"
+                if (k !== 'todas') {
+                  const ab = {}
+                  grupos.forEach(g => { ab[g.producto_id] = true })
+                  setAbiertos(ab)
+                } else {
+                  setAbiertos({})
+                }
+              }}
                 className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5
                   ${filtro===k?'bg-primary-600 text-white':'bg-white border text-gray-600 hover:bg-gray-50'}`}>
                 {l}
@@ -165,7 +178,7 @@ export default function CobrosPage() {
       </div>
 
       {/* Sin búsqueda — pantalla vacía */}
-      {!buscar.trim() && (
+      {filtro === 'todas' && !buscar.trim() && gruposFiltrados.length === 0 && (
         <div className="bg-white rounded-xl border p-12 text-center">
           <p className="text-4xl mb-3">🔍</p>
           <p className="font-semibold text-gray-600">Busca un cliente para ver sus cobros</p>
