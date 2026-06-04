@@ -35,13 +35,33 @@ export default function Dashboard() {
         <p className="text-sm text-gray-500 mt-1">{fechaHoy}</p>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-        <KPICard titulo="Capital en la calle"   valor={fmt(kpis.capital_en_calle)}    icono="💵" color="blue" />
-        <KPICard titulo="Intereses ganados"      valor={fmt(kpis.intereses_ganados)}   icono="📈" color="green" />
-        <KPICard titulo="Clientes en mora"       valor={kpis.clientes_en_mora}          icono="⚠️" alerta={kpis.clientes_en_mora > 0} />
-        <KPICard titulo="Recaudo del día"        valor={fmt(kpis.recaudo_hoy)}          icono="💳" color="green" />
-        <KPICard titulo="Cartera vencida +30d"   valor={fmt(kpis.cartera_vencida_30d)} icono="🔴" alerta={kpis.cartera_vencida_30d > 0} />
+      {/* KPIs fila 1 — inversión histórica */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-gradient-to-br from-[#1e3a5f] to-[#1a4a7a] rounded-2xl p-5 text-white shadow-lg">
+          <p className="text-blue-300 text-xs uppercase tracking-wide font-semibold">💼 Total invertido en préstamos</p>
+          <p className="text-3xl font-black mt-2">{fmt(kpis.total_invertido)}</p>
+          <p className="text-blue-300 text-xs mt-1">{kpis.num_creditos} crédito(s) históricos</p>
+        </div>
+        <div className="bg-gradient-to-br from-emerald-600 to-emerald-500 rounded-2xl p-5 text-white shadow-lg">
+          <p className="text-emerald-100 text-xs uppercase tracking-wide font-semibold">💰 Total recuperado</p>
+          <p className="text-3xl font-black mt-2">{fmt(kpis.total_recuperado)}</p>
+          <p className="text-emerald-100 text-xs mt-1">
+            {kpis.total_invertido > 0 ? Math.round((kpis.total_recuperado / kpis.total_invertido) * 100) : 0}% del capital invertido
+          </p>
+        </div>
+        <div className="bg-white rounded-2xl border-2 border-blue-100 p-5 shadow-sm">
+          <p className="text-gray-400 text-xs uppercase tracking-wide font-semibold">📊 Capital en la calle</p>
+          <p className="text-3xl font-black mt-2 text-blue-700">{fmt(kpis.capital_en_calle)}</p>
+          <p className="text-gray-400 text-xs mt-1">Saldo pendiente activo</p>
+        </div>
+      </div>
+
+      {/* KPIs fila 2 — operación diaria */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KPICard titulo="Intereses ganados"    valor={fmt(kpis.intereses_ganados)}   icono="📈" color="green" />
+        <KPICard titulo="Clientes en mora"     valor={kpis.clientes_en_mora}         icono="⚠️" alerta={kpis.clientes_en_mora > 0} />
+        <KPICard titulo="Recaudo del día"      valor={fmt(kpis.recaudo_hoy)}         icono="💳" color="green" />
+        <KPICard titulo="Cartera vencida +30d" valor={fmt(kpis.cartera_vencida_30d)} icono="🔴" alerta={kpis.cartera_vencida_30d > 0} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

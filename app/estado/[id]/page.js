@@ -7,7 +7,7 @@ const fmtFecha = f => f ? new Date(f).toLocaleDateString('es-CO', { day: '2-digi
 const fmtCorta = f => f ? new Date(f).toLocaleDateString('es-CO') : '—'
 
 const tipoIcon  = { prestamo: '💰', venta: '🛍️', empeno: '🔒', fiado: '🌿' }
-const tipoLabel = { prestamo: 'Préstamo', venta: 'Venta a crédito', empeno: 'Empeño', fiado: 'Fiado' }
+const tipoLabel = { prestamo: 'Préstamo', venta: 'Venta a crédito', empeno: 'Empeño', fiado: 'Fiado', adelanto: 'Adelanto' }
 
 export default function EstadoCuenta() {
   const { id }    = useParams()

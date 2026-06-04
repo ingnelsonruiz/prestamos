@@ -12,7 +12,7 @@ export async function GET(request) {
     const clienteId = searchParams.get('cliente_id')
 
     let sql = `
-      SELECT p.*, c.nombre AS nombre_cliente, c.documento,
+      SELECT p.*, c.nombre AS nombre_cliente, c.documento, c.telefono, c.direccion,
              COUNT(cu.id) AS total_cuotas,
              COUNT(cu.id) FILTER (WHERE cu.estado IN ('pendiente','parcial','mora')) AS cuotas_pendientes,
              COUNT(cu.id) FILTER (WHERE cu.estado = 'mora') AS cuotas_mora,
@@ -23,7 +23,7 @@ export async function GET(request) {
     `
     const values = []
     if (clienteId) { sql += ` WHERE p.cliente_id=$1`; values.push(clienteId) }
-    sql += ` GROUP BY p.id, c.nombre, c.documento ORDER BY p.fecha_creacion DESC`
+    sql += ` GROUP BY p.id, c.nombre, c.documento, c.telefono, c.direccion ORDER BY p.fecha_creacion DESC`
 
     const result = await query(sql, values)
     return NextResponse.json(result.rows)
@@ -46,15 +46,15 @@ export async function POST(request) {
     if (!cliente_id || !tipo || !monto_capital)
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 })
 
-    // Fiado: cuenta abierta sin cuotas ni interés
-    if (tipo === 'fiado') {
+    // Fiado y Adelanto: cuenta abierta sin cuotas ni interés
+    if (tipo === 'fiado' || tipo === 'adelanto') {
       const id = uuidv4()
       const prod = await query(
         `INSERT INTO ${S}.cred_productos
           (id,cliente_id,tipo,monto_capital,tasa_interes,num_cuotas,
            fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas)
-         VALUES ($1,$2,'fiado',$3,0,1,$4,false,'plano',$5,$6) RETURNING *`,
-        [id, cliente_id, parseFloat(monto_capital),
+         VALUES ($1,$2,$3,$4,0,1,$5,false,'plano',$6,$7) RETURNING *`,
+        [id, cliente_id, tipo, parseFloat(monto_capital),
          fecha_primer_pago || new Date().toISOString().split('T')[0],
          descripcion_bien||null, notas||null]
       )
@@ -99,7 +99,15 @@ export async function POST(request) {
       )
     }
 
-    const cuotas = generarCuotas({ ...prod.rows[0], cliente_id })
+    // Convertir fecha_primer_pago a string YYYY-MM-DD (PostgreSQL la devuelve como Date)
+    const prod0 = { ...prod.rows[0], cliente_id }
+    if (prod0.fecha_primer_pago instanceof Date) {
+      const d = prod0.fecha_primer_pago
+      prod0.fecha_primer_pago = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+    } else if (prod0.fecha_primer_pago && typeof prod0.fecha_primer_pago !== 'string') {
+      prod0.fecha_primer_pago = String(prod0.fecha_primer_pago).split('T')[0]
+    }
+    const cuotas = generarCuotas(prod0)
 
     if (cuotas.length > 0) {
       const vals = cuotas.map((_,i) => {

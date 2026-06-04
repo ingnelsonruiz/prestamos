@@ -11,6 +11,7 @@ const nav = [
   { href: '/empenos',    label: 'Empeños',    icon: '🔒' },
   { href: '/recibos',    label: 'Recibos',    icon: '🧾' },
   { href: '/informes',   label: 'Informes',   icon: '📊' },
+  { href: '/migracion',  label: 'Migración',  icon: '📦' },
 ]
 
 export default function Sidebar({ onClose }) {

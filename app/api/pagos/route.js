@@ -31,11 +31,12 @@ export async function POST(request) {
       [pagado, estadoCuota, cuota_id]
     )
 
-    const pagoId = uuidv4()
-    // Validar que la fecha de pago no sea futura
-    if (fecha_pago && fecha_pago > new Date().toISOString().split('T')[0])
+    const pagoId   = uuidv4()
+    // Verificar modo prueba desde BD
+    const modoPruebaRes = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`)
+    const modoPrueba    = modoPruebaRes.rows[0]?.valor === 'true'
+    if (!modoPrueba && fecha_pago && fecha_pago > new Date().toISOString().split('T')[0])
       return NextResponse.json({ error: 'La fecha del pago no puede ser mayor a la fecha actual' }, { status: 400 })
-
     const fechaReal = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()
     const u = await getUsuarioDesdeRequest(request)
     // u se reutiliza más abajo para auditoría — no redeclarar

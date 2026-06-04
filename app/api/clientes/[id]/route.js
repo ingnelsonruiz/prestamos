@@ -12,7 +12,9 @@ export async function GET(request, { params }) {
 
     const productos = await query(
       `SELECT p.*, COUNT(cu.id) AS total_cuotas,
-              COUNT(cu.id) FILTER (WHERE cu.estado='mora') AS cuotas_mora,
+              COUNT(cu.id) FILTER (WHERE cu.estado = 'pagada') AS cuotas_pagadas,
+              COUNT(cu.id) FILTER (WHERE cu.estado IN ('pendiente','parcial')) AS cuotas_pendientes,
+              COUNT(cu.id) FILTER (WHERE cu.estado = 'mora' OR (cu.fecha_vencimiento < CURRENT_DATE AND cu.estado != 'pagada')) AS cuotas_mora,
               COALESCE(SUM(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado != 'pagada'),0) AS saldo_total
        FROM ${S}.cred_productos p
        LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id

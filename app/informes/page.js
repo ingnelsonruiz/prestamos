@@ -14,6 +14,13 @@ export default function InformesPage() {
   const [data, setData]     = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState('')
+  const [globales, setGlobales] = useState(null)
+
+  useEffect(() => {
+    fetch('/api/dashboard').then(r=>r.json()).then(d => {
+      if (d.kpis) setGlobales(d.kpis)
+    })
+  }, [])
 
   const consultar = async () => {
     setLoading(true); setError('')
@@ -132,9 +139,32 @@ export default function InformesPage() {
 
       {error && <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-600 text-sm">{error}</div>}
 
+      {/* KPIs históricos globales */}
+      {globales && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="bg-gradient-to-br from-[#1e3a5f] to-[#1a4a7a] rounded-2xl p-5 text-white shadow-lg">
+            <p className="text-blue-300 text-xs uppercase tracking-wide font-semibold">💼 Total invertido en préstamos</p>
+            <p className="text-3xl font-black mt-2">{fmt(globales.total_invertido)}</p>
+            <p className="text-blue-300 text-xs mt-1">{globales.num_creditos} crédito(s) históricos · Todos los tiempos</p>
+          </div>
+          <div className="bg-gradient-to-br from-emerald-600 to-emerald-500 rounded-2xl p-5 text-white shadow-lg">
+            <p className="text-emerald-100 text-xs uppercase tracking-wide font-semibold">💰 Total recuperado</p>
+            <p className="text-3xl font-black mt-2">{fmt(globales.total_recuperado)}</p>
+            <p className="text-emerald-100 text-xs mt-1">
+              {globales.total_invertido > 0 ? Math.round((globales.total_recuperado / globales.total_invertido) * 100) : 0}% del capital invertido
+            </p>
+          </div>
+          <div className="bg-white rounded-2xl border-2 border-blue-100 p-5">
+            <p className="text-gray-400 text-xs uppercase tracking-wide font-semibold">📊 Capital en la calle</p>
+            <p className="text-3xl font-black mt-2 text-blue-700">{fmt(globales.capital_en_calle)}</p>
+            <p className="text-gray-400 text-xs mt-1">Pendiente activo ahora</p>
+          </div>
+        </div>
+      )}
+
       {data && (
         <>
-          {/* KPIs */}
+          {/* KPIs del período */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {[
               { label:'Total recaudado',   val: fmt(data.totales.total_recaudado),   color:'blue',   icon:'💵' },

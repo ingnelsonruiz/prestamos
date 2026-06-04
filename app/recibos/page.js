@@ -5,7 +5,7 @@ const fmt  = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 
 const fmtFecha = f => f ? new Date(f).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
 const fmtFechaSolo = f => f ? new Date(f).toLocaleDateString('es-CO') : '—'
 
-const tipoLabel   = { prestamo: 'Préstamo', venta: 'Venta a crédito', empeno: 'Empeño', fiado: 'Fiado' }
+const tipoLabel   = { prestamo: 'Préstamo', venta: 'Venta a crédito', empeno: 'Empeño', fiado: 'Fiado', adelanto: 'Adelanto' }
 const metodoBadge = { efectivo: 'bg-green-100 text-green-700', transferencia: 'bg-blue-100 text-blue-700', nequi: 'bg-purple-100 text-purple-700', daviplata: 'bg-red-100 text-red-700', otro: 'bg-gray-100 text-gray-600' }
 
 export default function RecibosPage() {

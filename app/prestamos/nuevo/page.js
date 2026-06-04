@@ -77,8 +77,8 @@ function SelectorCliente({ clientes, value, onChange }) {
   )
 }
 
-const tipoLabel = { prestamo:'💰 Préstamo', venta:'🛍 Venta', empeno:'🔒 Empeño', fiado:'🌿 Fiado' }
-const tipoColor = { prestamo:'bg-blue-50 text-blue-700', venta:'bg-yellow-50 text-yellow-700', empeno:'bg-purple-50 text-purple-700', fiado:'bg-green-50 text-green-700' }
+const tipoLabel = { prestamo:'💰 Préstamo', venta:'🛍 Venta', empeno:'🔒 Empeño', fiado:'🌿 Fiado', adelanto:'🤝 Adelanto' }
+const tipoColor = { prestamo:'bg-blue-50 text-blue-700', venta:'bg-yellow-50 text-yellow-700', empeno:'bg-purple-50 text-purple-700', fiado:'bg-green-50 text-green-700', adelanto:'bg-teal-50 text-teal-700' }
 
 function FiadoResumen({ clienteId, montoNuevo, clientes }) {
   const [productos, setProductos] = useState([])
@@ -244,13 +244,14 @@ function NuevoPrestamoContenido() {
               <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                 value={form.tipo} onChange={e=>set('tipo',e.target.value)}>
                 <option value="prestamo">Préstamo</option>
+                <option value="adelanto">Adelanto (sin intereses)</option>
                 <option value="venta">Venta a crédito</option>
                 <option value="empeno">Empeño</option>
                 <option value="fiado">Fiado</option>
               </select>
             </div>
 
-            {form.tipo !== 'fiado' && (
+            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
               <div>
                 <label className="text-xs font-medium text-gray-600">Método</label>
                 <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
@@ -269,7 +270,7 @@ function NuevoPrestamoContenido() {
                 placeholder="Ej: 500.000" />
             </div>
 
-            {form.tipo !== 'fiado' && (
+            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
               <div>
                 <label className="text-xs font-medium text-gray-600">Cuota inicial</label>
                 <InputMiles value={form.cuota_inicial} onChange={v=>set('cuota_inicial',v)}
@@ -277,7 +278,8 @@ function NuevoPrestamoContenido() {
               </div>
             )}
 
-            {form.tipo !== 'fiado' && (
+            {/* Tasa solo para préstamo, venta, empeño */}
+            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Tasa (%)</label>
@@ -292,6 +294,12 @@ function NuevoPrestamoContenido() {
                       <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
+              </>
+            )}
+
+            {/* Cuotas, frecuencia y fecha — solo para prestamo, venta, empeno */}
+            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
+              <>
                 <div>
                   <label className="text-xs font-medium text-gray-600">N° cuotas *</label>
                   <input type="number" required min="1" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
@@ -311,6 +319,24 @@ function NuevoPrestamoContenido() {
                     value={form.fecha_primer_pago} onChange={e=>set('fecha_primer_pago',e.target.value)} />
                 </div>
               </>
+            )}
+
+            {/* Adelanto — descripción del motivo */}
+            {form.tipo === 'adelanto' && (
+              <div className="col-span-2 space-y-3">
+                <div className="bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 text-sm text-teal-700">
+                  🤝 <strong>Adelanto sin intereses</strong> — cuenta abierta, sin cuotas fijas. El beneficiario devuelve cuando pueda o cuando se acuerde.
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600">
+                    ¿Para qué es el adelanto? <span className="text-gray-400">(motivo, destino)</span>
+                  </label>
+                  <textarea rows={3}
+                    placeholder="Ej: Adelanto de sueldo — quincena junio, Medicamentos EPS, Pasajes Valledupar, Emergencia familiar..."
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-teal-400"
+                    value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
+                </div>
+              </div>
             )}
 
             {form.tipo==='fiado' && (
@@ -376,8 +402,24 @@ function NuevoPrestamoContenido() {
 
         {/* Panel derecho */}
         <div className="bg-white rounded-xl border p-6">
-          {form.tipo === 'fiado'
-            ? <FiadoResumen clienteId={form.cliente_id} montoNuevo={parseFloat(form.monto_capital)||0} clientes={clientes} />
+          {form.tipo === 'fiado' || form.tipo === 'adelanto'
+            ? form.tipo === 'fiado'
+              ? <FiadoResumen clienteId={form.cliente_id} montoNuevo={parseFloat(form.monto_capital)||0} clientes={clientes} />
+              : <div className="text-center py-12">
+                  <p className="text-5xl mb-4">🤝</p>
+                  <p className="font-semibold text-gray-700 text-lg">Adelanto sin intereses</p>
+                  <p className="text-sm text-gray-400 mt-2">Se registra como cuenta abierta.</p>
+                  <p className="text-sm text-gray-400">El beneficiario devuelve el capital cuando se acuerde.</p>
+                  {parseFloat(form.monto_capital) > 0 && (
+                    <div className="mt-6 bg-teal-50 border border-teal-200 rounded-xl p-4">
+                      <p className="text-xs text-teal-500 uppercase font-semibold">Total a devolver</p>
+                      <p className="text-3xl font-black text-teal-700 mt-1">
+                        {new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(parseFloat(form.monto_capital))}
+                      </p>
+                      <p className="text-xs text-teal-400 mt-1">Sin intereses ✓</p>
+                    </div>
+                  )}
+                </div>
             : <>
                 <h3 className="font-semibold text-gray-700 mb-4">Vista previa tabla de amortización</h3>
                 {cuotas.length === 0

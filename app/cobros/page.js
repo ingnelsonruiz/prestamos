@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
 
-const tipoIcon  = { prestamo:'💰', venta:'🛍', empeno:'🔒', fiado:'🌿' }
-const tipoLabel = { prestamo:'Préstamo', venta:'Venta crédito', empeno:'Empeño', fiado:'Fiado finca' }
+const tipoIcon  = { prestamo:'💰', venta:'🛍', empeno:'🔒', fiado:'🌿', adelanto:'🤝' }
+const tipoLabel = { prestamo:'Préstamo', venta:'Venta crédito', empeno:'Empeño', fiado:'Fiado finca', adelanto:'Adelanto' }
 
 export default function CobrosPage() {
   const [grupos, setGrupos]   = useState([])   // agrupado por producto
@@ -50,12 +50,16 @@ export default function CobrosPage() {
           telefono:       c.telefono_cliente,
           tipo:           c.tipo_producto,
           descripcion:    c.descripcion_bien || c.descripcion || '',
+          fecha_prestamo: c.fecha_prestamo,
+          capital:        c.capital_producto,
           cuotas: []
         }
       }
       map[c.producto_id].cuotas.push(c)
     })
-    setGrupos(Object.values(map))
+    setGrupos(Object.values(map).sort((a,b) =>
+      new Date(b.fecha_prestamo) - new Date(a.fecha_prestamo)
+    ))
     setAbiertos({}) // cerrado por defecto
   }
 
@@ -315,46 +319,61 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
             <div key={g.producto_id} className={`bg-white rounded-xl border overflow-x-auto ${tieneMora ? 'border-red-300' : ''}`}>
               {/* Cabecera acordeón */}
               <button onClick={() => toggle(g.producto_id)}
-                className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">{tipoIcon[g.tipo] || '📄'}</span>
-                  <div className="text-left">
-                    <p className="font-semibold text-gray-800">{g.nombre_cliente}</p>
-                    <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                      <p className="text-xs text-gray-500">
+                className="w-full flex items-center justify-between px-5 py-5 hover:bg-gray-50 transition-colors">
+
+                {/* Izquierda: icono + info */}
+                <div className="flex items-center gap-4 flex-1 min-w-0">
+                  <span className="text-4xl flex-shrink-0">{tipoIcon[g.tipo] || '📄'}</span>
+                  <div className="text-left min-w-0 flex-1">
+                    {/* Nombre */}
+                    <p className="text-lg font-bold text-gray-900 leading-tight">{g.nombre_cliente}</p>
+                    {/* Fila de datos clave */}
+                    <div className="flex items-center gap-4 mt-1.5 flex-wrap">
+                      <span className="text-base font-bold text-gray-800">
                         {tipoLabel[g.tipo] || g.tipo}
-                        {g.descripcion && <span className="ml-2 italic">— {g.descripcion.slice(0,40)}{g.descripcion.length > 40 ? '...' : ''}</span>}
-                      </p>
+                        {g.descripcion && <span className="ml-1.5 text-gray-600"> — {g.descripcion.slice(0,45)}{g.descripcion.length > 45 ? '…' : ''}</span>}
+                      </span>
+                    </div>
+                    {/* Fila secundaria */}
+                    <div className="flex items-center gap-4 mt-1.5 flex-wrap">
+                      {g.fecha_prestamo && (
+                        <span className="text-sm font-semibold text-gray-600">
+                          📅 {new Date(g.fecha_prestamo).toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'})}
+                        </span>
+                      )}
+                      {g.capital && (
+                        <span className="text-sm font-bold text-gray-700">
+                          💼 Capital: {fmt(g.capital)}
+                        </span>
+                      )}
                       {g.telefono
-                        ? <a href={`tel:${g.telefono}`}
-                             onClick={e => e.stopPropagation()}
-                             className="flex items-center gap-2 text-base bg-green-100 text-green-700 px-4 py-1.5 rounded-full hover:bg-green-200 transition-colors font-semibold">
+                        ? <a href={`tel:${g.telefono}`} onClick={e => e.stopPropagation()}
+                             className="flex items-center gap-1.5 text-sm font-bold bg-green-100 text-green-700 px-3 py-1 rounded-full hover:bg-green-200 transition-colors">
                             📞 {g.telefono}
                           </a>
-                        : <span className="text-base bg-gray-100 text-gray-400 px-4 py-1.5 rounded-full font-medium">
-                            📞 Sin teléfono
-                          </span>
+                        : <span className="text-sm text-gray-400">📞 Sin teléfono</span>
                       }
+                      {tieneMora && (
+                        <>
+                          <span className="text-sm bg-red-100 text-red-600 px-2.5 py-1 rounded-full font-bold">⚠️ mora</span>
+                          <button onClick={e => abrirModalWA(e, g)}
+                            className="flex items-center gap-1.5 bg-[#25D366] text-white text-sm px-3 py-1 rounded-full hover:bg-[#1ebe5d] font-bold shadow-sm">
+                            <svg viewBox="0 0 24 24" className="w-4 h-4 fill-white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.125.558 4.122 1.532 5.856L.057 23.7a.75.75 0 00.918.919l5.98-1.527A11.943 11.943 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.907 0-3.694-.5-5.241-1.377l-.374-.216-3.893.995.982-3.81-.233-.386A9.96 9.96 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
+                            Cobro
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
-                  {tieneMora && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">⚠️ mora</span>
-                      <button
-                        onClick={e => abrirModalWA(e, g)}
-                        className="flex items-center gap-1.5 bg-[#25D366] text-white text-sm px-3 py-1.5 rounded-full hover:bg-[#1ebe5d] transition-colors font-semibold shadow-sm">
-                        <svg viewBox="0 0 24 24" className="w-4 h-4 fill-white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.125.558 4.122 1.532 5.856L.057 23.7a.75.75 0 00.918.919l5.98-1.527A11.943 11.943 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.907 0-3.694-.5-5.241-1.377l-.374-.216-3.893.995.982-3.81-.233-.386A9.956 9.956 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/></svg>
-                        Cobro
-                      </button>
-                    </div>
-                  )}
                 </div>
-                <div className="flex items-center gap-4">
+
+                {/* Derecha: monto + flecha */}
+                <div className="flex items-center gap-3 flex-shrink-0 ml-4">
                   <div className="text-right">
                     <p className="text-xs text-gray-400">{cuotasVista.length} cuota(s)</p>
-                    <p className="font-bold text-blue-600">{fmt(totalG)}</p>
+                    <p className="text-xl font-black text-blue-600">{fmt(totalG)}</p>
                   </div>
-                  <span className="text-gray-400 text-lg">{abierto ? '▲' : '▼'}</span>
+                  <span className="text-gray-400 text-xl">{abierto ? '▲' : '▼'}</span>
                 </div>
               </button>
 
@@ -600,15 +619,15 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600">Fecha del pago</label>
-              <input type="date" max={hoy} min="2020-01-01"
+              <input type="date" min="2020-01-01"
                 className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                 value={fechaPago}
-                onChange={e => {
-                  if (e.target.value > hoy) return // bloquear fecha futura
-                  setFechaPago(e.target.value)
-                }} />
+                onChange={e => setFechaPago(e.target.value)} />
+              {fechaPago > hoy && (
+                <p className="text-xs text-blue-500 mt-1">🧪 Fecha futura — modo prueba</p>
+              )}
               {fechaPago < hoy && (
-                <p className="text-xs text-amber-600 mt-1">⚠️ Estás registrando con fecha anterior a hoy ({new Date(fechaPago+'T12:00').toLocaleDateString('es-CO')})</p>
+                <p className="text-xs text-amber-600 mt-1">⚠️ Fecha anterior a hoy ({new Date(fechaPago+'T12:00').toLocaleDateString('es-CO')})</p>
               )}
             </div>
             <div>

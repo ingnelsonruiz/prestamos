@@ -2,7 +2,8 @@
 import { usePathname } from 'next/navigation'
 import Sidebar from './Sidebar'
 import BottomNav from './BottomNav'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import Link from 'next/link'
 
 const RUTAS_PUBLICAS = ['/login', '/estado']
 
@@ -10,6 +11,14 @@ export default function LayoutWrapper({ children }) {
   const pathname  = usePathname()
   const esPublica = RUTAS_PUBLICAS.some(r => pathname.startsWith(r))
   const [sidebarAbierto, setSidebarAbierto] = useState(false)
+  const [modoPrueba, setModoPrueba]         = useState(false)
+
+  useEffect(() => {
+    fetch('/api/config/modo-prueba')
+      .then(r => r.json())
+      .then(d => setModoPrueba(d.activo))
+      .catch(() => {})
+  }, [pathname]) // re-chequea cada vez que cambia de página
 
   if (esPublica) return <>{children}</>
 
@@ -49,6 +58,16 @@ export default function LayoutWrapper({ children }) {
           </div>
           <div className="w-10" /> {/* spacer */}
         </header>
+
+        {/* Banner modo prueba */}
+        {modoPrueba && (
+          <div className="bg-amber-400 text-amber-900 px-4 py-2 flex items-center justify-between text-sm font-semibold">
+            <span>🧪 MODO PRUEBA ACTIVO — Se permiten fechas futuras en pagos</span>
+            <Link href="/migracion" className="underline hover:text-amber-950 text-xs whitespace-nowrap ml-4">
+              Desactivar →
+            </Link>
+          </div>
+        )}
 
         {/* Página */}
         <main className="flex-1 p-4 lg:p-8 pb-24 lg:pb-8 overflow-auto">

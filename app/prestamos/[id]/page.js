@@ -17,10 +17,19 @@ export default function DetallePrestamo() {
   const [data, setData]       = useState(null)
   const [error, setError]     = useState(null)
   const [pagos, setPagos]     = useState([])
-  const [editModal, setEditModal] = useState(false)
-  const [form, setForm]       = useState({})
-  const [saving, setSaving]   = useState(false)
-  const [saveError, setSaveError] = useState('')
+  const [editModal, setEditModal]       = useState(false)
+  const [form, setForm]                 = useState({})
+  const [saving, setSaving]             = useState(false)
+  const [saveError, setSaveError]       = useState('')
+  const [modalLiquidar, setModalLiquidar] = useState(false)
+  const [liquidForm, setLiquidForm]     = useState({ monto: '', metodo: 'efectivo', notas: '', fecha: '' })
+  const [liquidando, setLiquidando]     = useState(false)
+  const [liquidError, setLiquidError]   = useState('')
+  const [liquidOk, setLiquidOk]         = useState(null)
+  const [modalConvertir, setModalConvertir] = useState(false)
+  const [convertForm, setConvertForm]   = useState({ tasa: '10', periodo_tasa: 'mensual', num_cuotas: '4', frecuencia_cobro: 'mensual', fecha_primer_pago: '', metodo_calculo: 'plano' })
+  const [convirtiendo, setConvirtiendo] = useState(false)
+  const [convertError, setConvertError] = useState('')
 
   const cargar = () => {
     fetch(`/api/productos/${id}`)
@@ -79,32 +88,108 @@ export default function DetallePrestamo() {
   }
 
   const set = (k,v) => setForm(f => ({...f,[k]:v}))
+  const setC = (k,v) => setConvertForm(f => ({...f,[k]:v}))
+
+  const confirmarConversion = async () => {
+    if (!convertForm.fecha_primer_pago) { setConvertError('Selecciona la fecha del primer pago'); return }
+    setConvirtiendo(true); setConvertError('')
+    // Usa el flujo de refinanciación: crea un préstamo nuevo con el saldo pendiente
+    const res = await fetch('/api/productos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cliente_id:         data.cliente_id,
+        tipo:               'prestamo',
+        monto_capital:      saldoPendiente,
+        tasa_interes:       parseFloat(convertForm.tasa),
+        periodo_tasa:       convertForm.periodo_tasa,
+        frecuencia_cobro:   convertForm.frecuencia_cobro,
+        num_cuotas:         parseInt(convertForm.num_cuotas),
+        fecha_primer_pago:  convertForm.fecha_primer_pago,
+        con_interes:        true,
+        metodo_calculo:     convertForm.metodo_calculo,
+        cuota_inicial:      0,
+        notas:              `Conversión desde ${data.tipo} — saldo inicial $${saldoPendiente.toLocaleString('es-CO')}`,
+        es_refinanciacion_de: id,
+      })
+    })
+    const result = await res.json()
+    setConvirtiendo(false)
+    if (!res.ok) { setConvertError(result.error); return }
+    setModalConvertir(false)
+    // Navegar al nuevo préstamo
+    window.location.href = `/prestamos/${result.producto.id}`
+  }
+
+  const confirmarLiquidacion = async () => {
+    const monto = parseFloat(liquidForm.monto)
+    if (!monto || monto <= 0) { setLiquidError('Ingresa el valor acordado'); return }
+    if (monto < saldoCapitalPendiente) {
+      setLiquidError(`El valor acordado no puede ser menor al saldo de capital (${fmt(saldoCapitalPendiente)}). Puedes perdonar intereses, pero no el capital prestado.`)
+      return
+    }
+    setLiquidando(true); setLiquidError('')
+    const hoy = new Date()
+    const fechaDefault = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-${String(hoy.getDate()).padStart(2,'0')}`
+    const res = await fetch(`/api/productos/${id}/liquidar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        monto_acordado: monto,
+        metodo_pago:    liquidForm.metodo,
+        notas:          liquidForm.notas,
+        fecha_pago:     liquidForm.fecha || fechaDefault,
+      })
+    })
+    const data = await res.json()
+    setLiquidando(false)
+    if (!res.ok) { setLiquidError(data.error); return }
+    setLiquidOk(data)
+    setModalLiquidar(false)
+    cargar()
+  }
 
   if (error) return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ {error}</div>
   if (!data)  return <div className="text-gray-400 p-4">Cargando...</div>
 
-  const totalPagado     = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_pagado||0), 0) || 0
-  const totalPendiente  = data.cuotas?.reduce((s,c) => s + (parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0)), 0) || 0
-  const totalProyectado = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_cuota), 0) || 0
-  const totalIntereses  = data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0) || 0
-  const cuotasPagadas   = data.cuotas?.filter(c => c.estado === 'pagada').length || 0
+  const totalPagado          = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_pagado||0), 0) || 0
+  const totalPendiente       = data.cuotas?.reduce((s,c) => s + (parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0)), 0) || 0
+  const totalProyectado      = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_cuota), 0) || 0
+  const totalIntereses       = data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0) || 0
+  const cuotasPagadas        = data.cuotas?.filter(c => c.estado === 'pagada').length || 0
+  const cuotasParciales      = data.cuotas?.filter(c => c.estado === 'parcial').length || 0
+  const cuotasPendientesLimpias = data.cuotas?.filter(c => c.estado === 'pendiente').length || 0
+  const cuotasMora           = data.cuotas?.filter(c => {
+    const vence = c.fecha_vencimiento?.split('T')[0]
+    const hoyStr = new Date().toISOString().split('T')[0]
+    return vence < hoyStr && c.estado !== 'pagada'
+  }).length || 0
+  // Saldo SOLO de capital pendiente (sin intereses futuros) — referencia para liquidar
+  const saldoCapitalPendiente = data.cuotas?.filter(c => c.estado !== 'pagada')
+    .reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0
   const puedeEditar     = !data.tiene_pagos
 
   // ── Score de comportamiento de pago ───────────────────────────────────────
+  // Evaluar TODAS las cuotas con actividad (pagadas o parciales), independiente de fecha
   const calcularScore = () => {
     const cuotas = data.cuotas || []
-    const hoy    = new Date()
-    // Cuotas que ya debieron pagarse (fiado tiene fecha 2099, se excluye del análisis)
+    const hoyStr = new Date().toISOString().split('T')[0]
+    // Solo evaluar cuotas con actividad real (pagos hechos o vencidas)
     const evaluables = cuotas.filter(c =>
-      c.fecha_vencimiento !== '2099-12-31' &&
-      new Date(c.fecha_vencimiento) <= hoy
+      c.fecha_vencimiento !== '2099-12-31' && (
+        c.estado === 'pagada' ||
+        c.estado === 'parcial' ||
+        c.fecha_vencimiento?.split('T')[0] <= hoyStr
+      )
     )
-    if (evaluables.length === 0) return 100 // sin historial aún
+    // Sin historial real: ninguna cuota pagada ni vencida aún
+    const hayPagos = cuotas.some(c => parseFloat(c.monto_pagado||0) > 0)
+    if (evaluables.length === 0 || !hayPagos) return null // null = sin historial
 
-    const pagadas  = evaluables.filter(c => c.estado === 'pagada').length
+    const pagadas   = evaluables.filter(c => c.estado === 'pagada').length
     const parciales = evaluables.filter(c => c.estado === 'parcial').length
-    const enMora   = evaluables.filter(c =>
-      c.estado !== 'pagada' &&
+    const enMora    = evaluables.filter(c =>
+      c.estado !== 'pagada' && c.estado !== 'parcial' &&
       parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0) > 0
     ).length
 
@@ -155,10 +240,25 @@ export default function DetallePrestamo() {
             </>
           )}
           {puedeRefinanciar && (
-            <Link href={urlRefinanciar}
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700">
-              🔄 Refinanciar saldo ({fmt(saldoPendiente)})
-            </Link>
+            <>
+              {/* Convertir a préstamo — solo para cuentas abiertas (fiado, adelanto, migrados) */}
+              {['fiado','adelanto'].includes(data.tipo) && (
+                <button
+                  onClick={() => { setConvertError(''); setModalConvertir(true) }}
+                  className="bg-teal-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-teal-700">
+                  🔀 Convertir a préstamo
+                </button>
+              )}
+              <button
+                onClick={() => { setLiquidForm({ monto: String(Math.round(saldoPendiente)), metodo: 'efectivo', notas: '', fecha: '' }); setLiquidError(''); setModalLiquidar(true) }}
+                className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700">
+                💵 Liquidar crédito
+              </button>
+              <Link href={urlRefinanciar}
+                className="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700">
+                🔄 Refinanciar saldo ({fmt(saldoPendiente)})
+              </Link>
+            </>
           )}
         </div>
       </div>
@@ -228,18 +328,30 @@ export default function DetallePrestamo() {
         </div>
 
         {/* KPIs fila 2: estado actual */}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
           <div className="bg-green-50 rounded-lg p-3 text-center">
             <p className="text-xs text-gray-500">Cobrado hasta hoy</p>
             <p className="font-bold text-green-700">{fmt(totalPagado)}</p>
           </div>
           <div className="bg-blue-50 rounded-lg p-3 text-center">
-            <p className="text-xs text-gray-500">Saldo pendiente</p>
+            <p className="text-xs text-gray-500">Saldo total pendiente</p>
             <p className="font-bold text-blue-700">{fmt(totalPendiente)}</p>
+            <p className="text-xs text-blue-400">(capital + interés)</p>
+          </div>
+          <div className="bg-amber-50 rounded-lg p-3 text-center border border-amber-200">
+            <p className="text-xs text-amber-600 font-semibold">💰 Saldo solo capital</p>
+            <p className="font-bold text-amber-700">{fmt(saldoCapitalPendiente)}</p>
+            <p className="text-xs text-amber-500">referencia liquidación</p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3 text-center">
-            <p className="text-xs text-gray-500">Avance</p>
-            <p className="font-bold text-gray-800">{cuotasPagadas}/{data.num_cuotas} cuotas</p>
+            <p className="text-xs text-gray-500 mb-1">Avance cuotas</p>
+            <p className="font-bold text-gray-800 text-sm">{cuotasPagadas + cuotasParciales}/{data.num_cuotas} con pago</p>
+            <div className="flex justify-center gap-2 mt-1 flex-wrap">
+              {cuotasPagadas > 0 && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-semibold">{cuotasPagadas} completas</span>}
+              {cuotasParciales > 0 && <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full font-semibold">{cuotasParciales} parciales</span>}
+              {cuotasMora > 0 && <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-semibold">{cuotasMora} mora</span>}
+              {cuotasPendientesLimpias > 0 && <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">{cuotasPendientesLimpias} pend.</span>}
+            </div>
           </div>
         </div>
 
@@ -252,17 +364,34 @@ export default function DetallePrestamo() {
         )}
 
         <div className="mt-4">
-          <div className="w-full bg-gray-200 rounded-full h-2">
-            <div className="bg-green-500 h-2 rounded-full transition-all"
+          <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden flex">
+            <div className="bg-green-500 h-3 transition-all"
               style={{ width: `${(cuotasPagadas / (data.num_cuotas||1)) * 100}%` }} />
+            <div className="bg-yellow-400 h-3 transition-all"
+              style={{ width: `${(cuotasParciales / (data.num_cuotas||1)) * 100}%` }} />
           </div>
-          <p className="text-xs text-gray-400 mt-1 text-right">
-            {Math.round((cuotasPagadas / (data.num_cuotas||1)) * 100)}% completado
-          </p>
+          <div className="flex justify-between items-center mt-1">
+            <div className="flex gap-3 text-xs text-gray-400">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>completas</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-400 inline-block"/>parciales</span>
+            </div>
+            <p className="text-xs text-gray-400">
+              {Math.round(((cuotasPagadas + cuotasParciales) / (data.num_cuotas||1)) * 100)}% con pago
+            </p>
+          </div>
         </div>
 
         {/* ── Panel de score / calificación ─────────────────────────────── */}
-        {data.tipo !== 'fiado' && (
+        {data.tipo !== 'fiado' && score === null && (
+          <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4 flex items-center gap-3">
+            <span className="text-3xl">⏳</span>
+            <div>
+              <p className="font-semibold text-gray-600">Sin historial de pagos aún</p>
+              <p className="text-xs text-gray-400 mt-0.5">La calificación se genera automáticamente cuando el cliente realice su primer pago.</p>
+            </div>
+          </div>
+        )}
+        {data.tipo !== 'fiado' && score !== null && (
           <div className={`mt-4 rounded-xl border ${cfg.border} ${cfg.bg} p-4`}>
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
@@ -298,11 +427,13 @@ export default function DetallePrestamo() {
             <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs">
               {(() => {
                 const cuotas = data.cuotas || []
-                const hoy = new Date()
-                const ev  = cuotas.filter(c => c.fecha_vencimiento !== '2099-12-31' && new Date(c.fecha_vencimiento) <= hoy)
+                const hoyStr2 = new Date().toISOString().split('T')[0]
+                const ev = cuotas.filter(c => c.fecha_vencimiento !== '2099-12-31' && (
+                  c.estado === 'pagada' || c.estado === 'parcial' || c.fecha_vencimiento?.split('T')[0] <= hoyStr2
+                ))
                 const pag = ev.filter(c => c.estado === 'pagada').length
                 const par = ev.filter(c => c.estado === 'parcial').length
-                const mor = ev.filter(c => c.estado !== 'pagada' && parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0) > 0).length
+                const mor = ev.filter(c => c.estado !== 'pagada' && c.estado !== 'parcial' && parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0) > 0).length
                 return (
                   <>
                     <div className="bg-white/70 rounded-lg p-2">
@@ -447,6 +578,221 @@ export default function DetallePrestamo() {
               </tr>
             </tfoot>
           </table>
+        </div>
+      )}
+
+      {/* Modal Convertir a préstamo */}
+      {modalConvertir && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+            <div className="bg-teal-600 px-6 py-4">
+              <p className="text-white font-bold text-lg">🔀 Convertir a préstamo con cuotas</p>
+              <p className="text-teal-200 text-xs mt-0.5">Se genera un plan de pagos sobre el saldo actual</p>
+            </div>
+            <div className="p-5 space-y-4">
+              {/* Info del saldo */}
+              <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 flex justify-between items-center">
+                <span className="text-sm text-teal-700 font-medium">Saldo a convertir</span>
+                <span className="font-black text-teal-700 text-lg">{fmt(saldoPendiente)}</span>
+              </div>
+
+              {convertError && <p className="text-red-500 text-sm bg-red-50 rounded-lg px-3 py-2">{convertError}</p>}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Tasa (%)</label>
+                  <input type="number" step="0.01" min="0"
+                    className="w-full border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-teal-500"
+                    value={convertForm.tasa} onChange={e => setC('tasa', e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Período tasa</label>
+                  <select className="w-full border rounded-xl px-3 py-2 text-sm"
+                    value={convertForm.periodo_tasa} onChange={e => setC('periodo_tasa', e.target.value)}>
+                    {['diario','semanal','quincenal','mensual','anual'].map(p => <option key={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">N° cuotas</label>
+                  <input type="number" min="1"
+                    className="w-full border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-teal-500"
+                    value={convertForm.num_cuotas} onChange={e => setC('num_cuotas', e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Frecuencia</label>
+                  <select className="w-full border rounded-xl px-3 py-2 text-sm"
+                    value={convertForm.frecuencia_cobro} onChange={e => setC('frecuencia_cobro', e.target.value)}>
+                    {['diario','semanal','quincenal','mensual'].map(p => <option key={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Método de cálculo</label>
+                  <select className="w-full border rounded-xl px-3 py-2 text-sm"
+                    value={convertForm.metodo_calculo} onChange={e => setC('metodo_calculo', e.target.value)}>
+                    <option value="plano">Interés plano</option>
+                    <option value="frances">Sistema francés</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-gray-600 block mb-1">Fecha primer pago *</label>
+                  <input type="date"
+                    className="w-full border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-teal-500"
+                    value={convertForm.fecha_primer_pago} onChange={e => setC('fecha_primer_pago', e.target.value)} />
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+                ⚠️ La cuenta abierta quedará como <strong>refinanciada</strong> y se creará un nuevo préstamo con el plan de cuotas generado automáticamente.
+              </div>
+
+              <div className="flex gap-3">
+                <button onClick={() => setModalConvertir(false)}
+                  className="flex-1 border rounded-xl py-2.5 text-sm text-gray-600 hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button onClick={confirmarConversion} disabled={convirtiendo}
+                  className="flex-1 bg-teal-600 text-white rounded-xl py-2.5 text-sm font-bold hover:bg-teal-700 disabled:opacity-50">
+                  {convirtiendo ? 'Generando...' : '✅ Convertir y generar cuotas'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Banner éxito liquidación */}
+      {liquidOk && (
+        <div className="bg-emerald-50 border border-emerald-300 rounded-xl px-5 py-4 flex justify-between items-start">
+          <div>
+            <p className="font-bold text-emerald-700 text-base">✅ Crédito liquidado — {liquidOk.numero_recibo}</p>
+            <p className="text-sm text-emerald-600 mt-1">
+              Valor cobrado: <strong>{fmt(liquidOk.monto_acordado)}</strong>
+              {liquidOk.descuento > 0 && (
+                <span className="ml-2 text-emerald-500">· Descuento aplicado: {fmt(liquidOk.descuento)}</span>
+              )}
+            </p>
+            <p className="text-xs text-emerald-500 mt-0.5">{liquidOk.cuotas_cerradas} cuota(s) cerradas automáticamente</p>
+          </div>
+          <button onClick={() => setLiquidOk(null)} className="text-emerald-400 hover:text-emerald-600">✕</button>
+        </div>
+      )}
+
+      {/* Modal liquidación anticipada */}
+      {modalLiquidar && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="bg-emerald-600 px-6 py-4">
+              <p className="text-white font-bold text-lg">💵 Liquidar crédito anticipado</p>
+              <p className="text-emerald-200 text-xs mt-0.5">El cliente recoge el crédito con valor acordado</p>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Info del saldo real */}
+              <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Saldo total (capital + interés)</span>
+                  <span className="font-bold text-gray-800">{fmt(saldoPendiente)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-amber-600 font-medium">💰 Solo capital pendiente</span>
+                  <span className="font-bold text-amber-700">{fmt(saldoCapitalPendiente)}</span>
+                </div>
+                <div className="flex justify-between border-t pt-2">
+                  <span className="text-gray-500">Intereses que se perdonarían</span>
+                  <span className="font-medium text-orange-400">{fmt(Math.max(0, saldoPendiente - saldoCapitalPendiente))}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Cuotas por cerrar</span>
+                  <span className="font-semibold">{data.cuotas?.filter(c => c.estado !== 'pagada').length || 0}</span>
+                </div>
+                {parseFloat(liquidForm.monto) > 0 && parseFloat(liquidForm.monto) < saldoPendiente && parseFloat(liquidForm.monto) >= saldoCapitalPendiente && (
+                  <div className="flex justify-between border-t pt-2">
+                    <span className="text-orange-500 font-medium">Intereses perdonados</span>
+                    <span className="font-bold text-orange-500">{fmt(saldoPendiente - parseFloat(liquidForm.monto))}</span>
+                  </div>
+                )}
+                {parseFloat(liquidForm.monto) > 0 && parseFloat(liquidForm.monto) < saldoCapitalPendiente && (
+                  <div className="flex justify-between border-t pt-2 bg-red-50 rounded-lg px-2 py-1 -mx-1">
+                    <span className="text-red-600 font-bold">⛔ Por debajo del capital</span>
+                    <span className="font-bold text-red-600">−{fmt(saldoCapitalPendiente - parseFloat(liquidForm.monto))}</span>
+                  </div>
+                )}
+              </div>
+
+              {liquidError && <p className="text-red-500 text-sm bg-red-50 rounded-lg px-3 py-2">{liquidError}</p>}
+
+              {/* Valor acordado */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">
+                  Valor acordado con el cliente <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-semibold text-sm">$</span>
+                  <input
+                    type="text" inputMode="numeric" placeholder="0"
+                    className="w-full border-2 rounded-xl pl-7 pr-4 py-3 text-lg font-bold focus:outline-none focus:border-emerald-500"
+                    value={liquidForm.monto ? Number(liquidForm.monto).toLocaleString('es-CO') : ''}
+                    onChange={e => {
+                      const raw = e.target.value.replace(/\./g,'').replace(/,/g,'.').replace(/[^\d]/g,'')
+                      setLiquidForm(f => ({ ...f, monto: raw }))
+                    }} />
+                </div>
+                {liquidForm.monto && <p className="text-xs text-gray-400 mt-1">{fmt(parseFloat(liquidForm.monto) || 0)}</p>}
+                <button
+                  onClick={() => setLiquidForm(f => ({ ...f, monto: String(Math.round(saldoPendiente)) }))}
+                  className="text-xs text-emerald-600 hover:underline mt-1">
+                  Usar saldo completo ({fmt(saldoPendiente)})
+                </button>
+              </div>
+
+              {/* Método */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">Método de pago</label>
+                <select className="w-full border rounded-xl px-3 py-2 text-sm"
+                  value={liquidForm.metodo}
+                  onChange={e => setLiquidForm(f => ({ ...f, metodo: e.target.value }))}>
+                  {['efectivo','transferencia','nequi','daviplata','otro'].map(m =>
+                    <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+
+              {/* Fecha */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">Fecha (opcional)</label>
+                <input type="date"
+                  className="w-full border rounded-xl px-3 py-2 text-sm"
+                  value={liquidForm.fecha}
+                  onChange={e => setLiquidForm(f => ({ ...f, fecha: e.target.value }))} />
+              </div>
+
+              {/* Notas */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">Notas del acuerdo</label>
+                <input type="text" placeholder="Ej: Acuerdo verbal del 4 de junio..."
+                  className="w-full border rounded-xl px-3 py-2 text-sm"
+                  value={liquidForm.notas}
+                  onChange={e => setLiquidForm(f => ({ ...f, notas: e.target.value }))} />
+              </div>
+
+              {/* Advertencia */}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+                ⚠️ Esta acción cierra el crédito y marca <strong>todas las cuotas pendientes como pagadas</strong>. No se puede deshacer.
+              </div>
+
+              {/* Botones */}
+              <div className="flex gap-3">
+                <button onClick={() => setModalLiquidar(false)}
+                  className="flex-1 border rounded-xl py-2.5 text-sm text-gray-600 hover:bg-gray-50">
+                  Cancelar
+                </button>
+                <button onClick={confirmarLiquidacion} disabled={liquidando}
+                  className="flex-1 bg-emerald-600 text-white rounded-xl py-2.5 text-sm font-bold hover:bg-emerald-700 disabled:opacity-50">
+                  {liquidando ? 'Procesando...' : '✅ Confirmar liquidación'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

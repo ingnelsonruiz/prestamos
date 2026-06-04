@@ -13,6 +13,8 @@ export async function GET() {
       clientesMora,
       recaudoHoy,
       carteraVencida,
+      totalInvertido,
+      totalRecuperado,
       cuotasHoy,
       cuotasSemana,
       empenosVencer,
@@ -33,6 +35,15 @@ export async function GET() {
       query(`SELECT COALESCE(SUM(monto_cuota - monto_pagado),0) AS total
              FROM ${S}.cred_cuotas
              WHERE estado='mora' AND ($1::date - fecha_vencimiento) > 30`, [hoy]),
+
+      // Total histórico invertido (todos los desembolsos)
+      query(`SELECT COALESCE(SUM(monto_capital),0) AS total,
+                    COUNT(*) AS num_creditos
+             FROM ${S}.cred_productos
+             WHERE tipo NOT IN ('fiado','adelanto')`),
+
+      // Total recuperado (todo lo cobrado históricamente)
+      query(`SELECT COALESCE(SUM(monto),0) AS total FROM ${S}.cred_pagos`),
 
       query(`SELECT cu.*, c.nombre AS nombre_cliente, p.tipo
              FROM ${S}.cred_cuotas cu
@@ -65,6 +76,9 @@ export async function GET() {
         clientes_en_mora:    parseInt(clientesMora.rows[0].total),
         recaudo_hoy:         parseFloat(recaudoHoy.rows[0].total),
         cartera_vencida_30d: parseFloat(carteraVencida.rows[0].total),
+        total_invertido:     parseFloat(totalInvertido.rows[0].total),
+        num_creditos:        parseInt(totalInvertido.rows[0].num_creditos),
+        total_recuperado:    parseFloat(totalRecuperado.rows[0].total),
       },
       cuotas_hoy:       cuotasHoy.rows,
       cuotas_semana:    cuotasSemana.rows,
