@@ -14,6 +14,7 @@ export default function EstadoCuenta() {
   const [data, setData]   = useState(null)
   const [error, setError] = useState(null)
   const [abiertos, setAbiertos] = useState({})
+  const [tab, setTab]           = useState('activos')
 
   useEffect(() => {
     fetch(`/api/estado/${id}`)
@@ -35,11 +36,17 @@ export default function EstadoCuenta() {
     </div>
   )
 
-  const productos   = data.productos || []
-  const deudaTotal  = productos.reduce((s, p) => s + parseFloat(p.saldo_total || 0), 0)
-  const pagadoTotal = productos.reduce((s, p) => s + parseFloat(p.total_pagado || 0), 0)
-  const tieneMora   = productos.some(p => parseInt(p.cuotas_mora || 0) > 0)
+  const productos    = data.productos || []
+  const historial    = data.historial || []
+  const deudaTotal   = productos.reduce((s, p) => s + parseFloat(p.saldo_total || 0), 0)
+  const pagadoTotal  = productos.reduce((s, p) => s + parseFloat(p.total_pagado || 0), 0)
+  const tieneMora    = productos.some(p => parseInt(p.cuotas_mora || 0) > 0)
   const ultimosPagos = data.ultimos_pagos || []
+
+  const productosTab = tab === 'activos' ? productos
+    : tab === 'saldados'     ? historial.filter(p => p.estado === 'saldado')
+    : tab === 'refinanciados'? historial.filter(p => p.estado === 'refinanciado')
+    : [...productos, ...historial]
 
   return (
     <div className="min-h-screen bg-slate-100 pb-12" style={{ fontFamily: 'system-ui, sans-serif' }}>
@@ -88,14 +95,35 @@ export default function EstadoCuenta() {
         </div>
       </div>
 
-      {/* ── CRÉDITOS ACTIVOS ── */}
-      {productos.length > 0 && (
-        <div className="mx-4 mt-5 space-y-4">
+      {/* ── SEGMENTADORES ── */}
+      <div className="mx-4 mt-5">
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { k:'activos',       l:'Activos',       n: productos.length,                           on:'bg-[#1e3a5f] text-white', off:'bg-white text-gray-500 border border-gray-200' },
+            { k:'saldados',      l:'Saldados',       n: historial.filter(p=>p.estado==='saldado').length,       on:'bg-emerald-600 text-white', off:'bg-white text-gray-500 border border-gray-200' },
+            { k:'refinanciados', l:'Refinanciados',  n: historial.filter(p=>p.estado==='refinanciado').length,  on:'bg-purple-600 text-white', off:'bg-white text-gray-500 border border-gray-200' },
+            { k:'todos',         l:'Todos',           n: productos.length + historial.length,        on:'bg-gray-700 text-white', off:'bg-white text-gray-500 border border-gray-200' },
+          ].map(f => (
+            <button key={f.k} onClick={() => setTab(f.k)}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 transition-all
+                ${tab === f.k ? f.on + ' shadow-md' : f.off}`}>
+              {f.l}
+              <span className={`text-xs px-2 py-0.5 rounded-full font-black ${tab === f.k ? 'bg-white/25 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                {f.n}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── CRÉDITOS ── */}
+      {productosTab.length > 0 && (
+        <div className="mx-4 mt-4 space-y-4">
           <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
-            {productos.length} crédito(s) activo(s)
+            {productosTab.length} crédito(s)
           </p>
 
-          {productos.map(p => {
+          {productosTab.map(p => {
             const pagadas    = parseInt(p.cuotas_pagadas  || 0)
             const total      = parseInt(p.total_cuotas    || 0)
             const mora       = parseInt(p.cuotas_mora     || 0)
@@ -109,7 +137,7 @@ export default function EstadoCuenta() {
 
             return (
               <div key={p.id} className={`bg-white rounded-2xl shadow-sm overflow-hidden border-l-4
-                ${mora > 0 ? 'border-red-400' : 'border-blue-400'}`}>
+                ${mora > 0 ? 'border-red-400' : p.estado === 'saldado' ? 'border-emerald-400' : p.estado === 'refinanciado' ? 'border-purple-400' : 'border-blue-400'}`}>
 
                 {/* Cabecera del crédito */}
                 <button onClick={() => toggle(p.id)}
@@ -118,7 +146,11 @@ export default function EstadoCuenta() {
                     <div className="flex items-center gap-3">
                       <span className="text-3xl">{tipoIcon[p.tipo] || '📄'}</span>
                       <div>
-                        <p className="font-bold text-gray-800">{tipoLabel[p.tipo] || p.tipo}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-bold text-gray-800">{tipoLabel[p.tipo] || p.tipo}</p>
+                      {p.estado === 'saldado' && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold">✅ Saldado</span>}
+                      {p.estado === 'refinanciado' && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-semibold">🔄 Refinanciado</span>}
+                    </div>
                         {p.descripcion_bien && <p className="text-xs text-gray-400">{p.descripcion_bien}</p>}
                         <p className="text-xs text-gray-400 mt-0.5">Desde {fmtCorta(p.fecha_creacion)}</p>
                       </div>
@@ -236,8 +268,8 @@ export default function EstadoCuenta() {
         </div>
       )}
 
-      {/* ── SIN CRÉDITOS ── */}
-      {productos.length === 0 && (
+      {/* ── SIN CRÉDITOS EN ESTE SEGMENTO ── */}
+      {productosTab.length === 0 && (
         <div className="mx-4 mt-8 bg-white rounded-2xl p-10 text-center shadow-sm">
           <p className="text-5xl mb-3">🎉</p>
           <p className="font-bold text-gray-700 text-lg">¡Sin deudas activas!</p>

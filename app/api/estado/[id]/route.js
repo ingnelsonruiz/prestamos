@@ -41,6 +41,25 @@ export async function GET(request, { params }) {
       [id]
     )
 
+    // Todos los productos (incluyendo saldados y refinanciados)
+    const historial = await query(
+      `SELECT
+         p.id, p.tipo, p.monto_capital, p.descripcion_bien, p.estado,
+         p.fecha_primer_pago, p.tasa_interes, p.periodo_tasa,
+         p.frecuencia_cobro, p.num_cuotas, p.fecha_creacion,
+         COUNT(cu.id) AS total_cuotas,
+         COUNT(cu.id) FILTER (WHERE cu.estado = 'pagada') AS cuotas_pagadas,
+         COALESCE(SUM(cu.monto_cuota), 0) AS total_proyectado,
+         COALESCE(SUM(cu.monto_pagado), 0) AS total_pagado
+       FROM ${S}.cred_productos p
+       LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
+       WHERE p.cliente_id = $1
+         AND p.estado IN ('saldado','refinanciado','decomisado')
+       GROUP BY p.id
+       ORDER BY p.fecha_creacion DESC`,
+      [id]
+    )
+
     // Historial de últimos pagos (últimos 5 por producto)
     const pagosRes = await query(
       `SELECT pg.numero_recibo, pg.monto, pg.fecha_pago, pg.metodo_pago,
@@ -57,6 +76,7 @@ export async function GET(request, { params }) {
       nombre:    cliente.rows[0].nombre,
       documento: cliente.rows[0].documento,
       productos: productos.rows,
+      historial: historial.rows,
       ultimos_pagos: pagosRes.rows,
     })
   } catch (error) {
