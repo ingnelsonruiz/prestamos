@@ -302,13 +302,34 @@ export default function DetallePrestamo() {
 
       {/* Encabezado */}
       <div className="bg-white rounded-xl border p-6">
-        <div className="flex justify-between items-start">
+        <div className="flex justify-between items-start flex-wrap gap-4">
           <div>
             <span className="text-xs uppercase font-bold text-primary-600 bg-primary-50 px-2 py-1 rounded">
               {data.tipo}
             </span>
             <h2 className="text-xl font-bold mt-2">{data.nombre_cliente}</h2>
             <p className="text-gray-500 text-sm">{data.documento}</p>
+          </div>
+          {/* Datos clave del préstamo en el encabezado */}
+          <div className="flex flex-wrap gap-3 text-sm">
+            <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
+              <p className="text-xs text-gray-400">📅 Fecha del préstamo</p>
+              <p className="font-bold text-gray-800 mt-0.5">
+                {data.fecha_creacion ? new Date(data.fecha_creacion).toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '—'}
+              </p>
+            </div>
+            {data.tipo !== 'fiado' && data.tipo !== 'adelanto' && (
+              <>
+                <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
+                  <p className="text-xs text-gray-400">Tasa</p>
+                  <p className="font-bold text-gray-800 mt-0.5">{data.tasa_interes}% {data.periodo_tasa}</p>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
+                  <p className="text-xs text-gray-400">Cuotas</p>
+                  <p className="font-bold text-gray-800 mt-0.5">{data.num_cuotas} {data.frecuencia_cobro}</p>
+                </div>
+              </>
+            )}
           </div>
           <span className={`px-3 py-1 rounded-full text-sm font-medium
             ${data.estado==='saldado'      ? 'bg-green-100 text-green-700' :
@@ -464,15 +485,29 @@ export default function DetallePrestamo() {
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-4 mt-4 text-sm text-gray-600">
-          {data.tipo === 'fiado'
-            ? <div><span className="font-medium">Fecha fiado:</span> {data.fecha_primer_pago ? new Date(data.fecha_primer_pago).toLocaleDateString('es-CO') : '—'}</div>
-            : <>
-                <div><span className="font-medium">Tasa:</span> {data.tasa_interes}% {data.periodo_tasa}</div>
-                <div><span className="font-medium">Método:</span> {data.metodo_calculo}</div>
-                <div><span className="font-medium">Frecuencia:</span> {data.frecuencia_cobro}</div>
-              </>
-          }
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 text-sm text-gray-600">
+          <div className="bg-gray-50 rounded-lg px-3 py-2">
+            <p className="text-xs text-gray-400 mb-0.5">📅 Fecha del préstamo</p>
+            <p className="font-bold text-gray-800">
+              {data.fecha_creacion ? new Date(data.fecha_creacion).toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'}) : '—'}
+            </p>
+          </div>
+          {data.tipo !== 'fiado' && data.tipo !== 'adelanto' && (
+            <>
+              <div className="bg-gray-50 rounded-lg px-3 py-2">
+                <p className="text-xs text-gray-400 mb-0.5">Tasa</p>
+                <p className="font-semibold text-gray-700">{data.tasa_interes}% {data.periodo_tasa}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg px-3 py-2">
+                <p className="text-xs text-gray-400 mb-0.5">Método</p>
+                <p className="font-semibold text-gray-700 capitalize">{data.metodo_calculo}</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg px-3 py-2">
+                <p className="text-xs text-gray-400 mb-0.5">Frecuencia</p>
+                <p className="font-semibold text-gray-700 capitalize">{data.frecuencia_cobro}</p>
+              </div>
+            </>
+          )}
         </div>
         {data.descripcion_bien && (
           <p className="mt-3 text-sm text-gray-600">
