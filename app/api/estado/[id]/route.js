@@ -15,11 +15,23 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: 'No encontrado' }, { status: 404 })
 
     const productos = await query(
-      `SELECT p.id, p.tipo, p.monto_capital, p.descripcion_bien, p.estado,
-              p.fecha_primer_pago, p.tasa_interes, p.num_cuotas,
-              COUNT(cu.id) AS total_cuotas,
-              COUNT(cu.id) FILTER (WHERE cu.estado='mora') AS cuotas_mora,
-              COALESCE(SUM(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado != 'pagada'),0) AS saldo_total
+      `SELECT
+         p.id, p.tipo, p.monto_capital, p.descripcion_bien, p.estado,
+         p.fecha_primer_pago, p.tasa_interes, p.periodo_tasa,
+         p.frecuencia_cobro, p.metodo_calculo, p.num_cuotas, p.fecha_creacion,
+         -- totales
+         COUNT(cu.id)                                                          AS total_cuotas,
+         COUNT(cu.id) FILTER (WHERE cu.estado = 'pagada')                      AS cuotas_pagadas,
+         COUNT(cu.id) FILTER (WHERE cu.estado IN ('pendiente','parcial'))       AS cuotas_pendientes,
+         COUNT(cu.id) FILTER (WHERE cu.fecha_vencimiento < CURRENT_DATE AND cu.estado != 'pagada') AS cuotas_mora,
+         -- montos
+         COALESCE(SUM(cu.monto_cuota), 0)                                      AS total_proyectado,
+         COALESCE(SUM(cu.monto_pagado), 0)                                     AS total_pagado,
+         COALESCE(SUM(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado != 'pagada'), 0) AS saldo_total,
+         COALESCE(SUM(cu.abono_interes), 0)                                    AS total_intereses,
+         -- próxima cuota
+         MIN(cu.fecha_vencimiento) FILTER (WHERE cu.estado IN ('pendiente','parcial')) AS proxima_fecha,
+         MIN(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado IN ('pendiente','parcial')) AS proxima_valor
        FROM ${S}.cred_productos p
        LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
        WHERE p.cliente_id = $1
@@ -29,10 +41,23 @@ export async function GET(request, { params }) {
       [id]
     )
 
+    // Historial de últimos pagos (últimos 5 por producto)
+    const pagosRes = await query(
+      `SELECT pg.numero_recibo, pg.monto, pg.fecha_pago, pg.metodo_pago,
+              cu.numero_cuota, pg.producto_id
+       FROM ${S}.cred_pagos pg
+       JOIN ${S}.cred_cuotas cu ON cu.id = pg.cuota_id
+       WHERE pg.cliente_id = $1
+       ORDER BY pg.fecha_pago DESC
+       LIMIT 10`,
+      [id]
+    )
+
     return NextResponse.json({
-      nombre:   cliente.rows[0].nombre,
+      nombre:    cliente.rows[0].nombre,
       documento: cliente.rows[0].documento,
       productos: productos.rows,
+      ultimos_pagos: pagosRes.rows,
     })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })

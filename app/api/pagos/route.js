@@ -81,13 +81,19 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url)
     const productoId = searchParams.get('producto_id')
     const clienteId  = searchParams.get('cliente_id')
+    const fecha      = searchParams.get('fecha') // YYYY-MM-DD para filtrar por día
 
-    let sql = `SELECT pg.*, cu.numero_cuota, cu.monto_cuota
-               FROM ${S}.cred_pagos pg
-               JOIN ${S}.cred_cuotas cu ON cu.id = pg.cuota_id WHERE 1=1`
+    let sql = `
+      SELECT pg.*, cu.numero_cuota, cu.monto_cuota,
+             c.nombre AS nombre_cliente, c.documento
+      FROM ${S}.cred_pagos pg
+      JOIN ${S}.cred_cuotas  cu ON cu.id  = pg.cuota_id
+      JOIN ${S}.cred_clientes c  ON c.id  = pg.cliente_id
+      WHERE 1=1`
     const values = []
     if (productoId) { sql += ` AND pg.producto_id=$${values.length+1}`; values.push(productoId) }
     if (clienteId)  { sql += ` AND pg.cliente_id=$${values.length+1}`;  values.push(clienteId) }
+    if (fecha)      { sql += ` AND pg.fecha_pago::date=$${values.length+1}`; values.push(fecha) }
     sql += ` ORDER BY pg.fecha_pago DESC`
 
     const result = await query(sql, values)

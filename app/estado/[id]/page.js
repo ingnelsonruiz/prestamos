@@ -2,140 +2,254 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 
-const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
-const tipoIcon  = { prestamo:'💰', venta:'🛍', empeno:'🔒', fiado:'🌿' }
-const tipoLabel = { prestamo:'Préstamo', venta:'Venta a crédito', empeno:'Empeño', fiado:'Fiado' }
+const fmt     = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v)
+const fmtFecha = f => f ? new Date(f).toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' }) : '—'
+const fmtCorta = f => f ? new Date(f).toLocaleDateString('es-CO') : '—'
+
+const tipoIcon  = { prestamo: '💰', venta: '🛍️', empeno: '🔒', fiado: '🌿' }
+const tipoLabel = { prestamo: 'Préstamo', venta: 'Venta a crédito', empeno: 'Empeño', fiado: 'Fiado' }
 
 export default function EstadoCuenta() {
-  const { id } = useParams()
+  const { id }    = useParams()
   const [data, setData]   = useState(null)
   const [error, setError] = useState(null)
+  const [abiertos, setAbiertos] = useState({})
 
   useEffect(() => {
     fetch(`/api/estado/${id}`)
       .then(r => r.json())
       .then(d => d.error ? setError(d.error) : setData(d))
-      .catch(() => setError('No se pudo cargar el estado de cuenta'))
+      .catch(() => setError('No se pudo cargar'))
   }, [id])
 
+  const toggle = key => setAbiertos(a => ({ ...a, [key]: !a[key] }))
+
   if (error) return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-6">
-      <p className="text-red-500 text-center text-sm">No se encontró la información</p>
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+      <p className="text-red-500 text-center text-sm">❌ No se encontró la información</p>
     </div>
   )
   if (!data) return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-      <p className="text-gray-400 animate-pulse">Cargando...</p>
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center">
+      <p className="text-gray-400 animate-pulse">Cargando estado de cuenta...</p>
     </div>
   )
 
-  const productosActivos = (data.productos||[]).filter(p =>
-    !['saldado','decomisado','refinanciado'].includes(p.estado)
-  )
-  const deudaTotal = productosActivos.reduce((s,p) => s + parseFloat(p.saldo_total||0), 0)
-  const tieneMora  = productosActivos.some(p => parseInt(p.cuotas_mora||0) > 0)
+  const productos   = data.productos || []
+  const deudaTotal  = productos.reduce((s, p) => s + parseFloat(p.saldo_total || 0), 0)
+  const pagadoTotal = productos.reduce((s, p) => s + parseFloat(p.total_pagado || 0), 0)
+  const tieneMora   = productos.some(p => parseInt(p.cuotas_mora || 0) > 0)
+  const ultimosPagos = data.ultimos_pagos || []
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-slate-100 pb-12" style={{ fontFamily: 'system-ui, sans-serif' }}>
 
-      {/* Header */}
-      <div className="bg-[#1e3a5f] text-white px-5 pt-10 pb-8 text-center">
-        <p className="text-blue-300 text-xs uppercase tracking-widest mb-2">Estado de cuenta</p>
-        <h1 className="text-2xl font-bold leading-tight">{data.nombre}</h1>
+      {/* ── HEADER ── */}
+      <div className="bg-[#1e3a5f] text-white px-5 pt-10 pb-6 text-center">
+        <p className="text-blue-300 text-xs uppercase tracking-widest mb-1">💼 Inversiones Hnos Liñán</p>
+        <p className="text-blue-300 text-xs mb-4">Estado de cuenta</p>
+        <h1 className="text-2xl font-bold">{data.nombre}</h1>
         <p className="text-blue-300 text-sm mt-1">CC {data.documento}</p>
-
-        <div className="mt-6 bg-white/10 rounded-2xl p-5">
-          <p className="text-blue-200 text-sm mb-1">Deuda total activa</p>
-          <p className={`text-4xl font-bold ${deudaTotal > 0 ? 'text-white' : 'text-green-400'}`}>
-            {fmt(deudaTotal)}
-          </p>
-          <p className="text-blue-300 text-xs mt-2">
-            {productosActivos.length} crédito(s) activo(s)
-          </p>
-        </div>
-
-        {tieneMora && (
-          <div className="mt-4 bg-red-500/30 border border-red-400/50 rounded-xl px-4 py-3">
-            <p className="text-red-200 text-sm font-semibold">⚠️ Tienes cuotas en mora</p>
-            <p className="text-red-300 text-xs mt-1">Comunícate para ponerte al día</p>
-          </div>
-        )}
-        {!tieneMora && deudaTotal > 0 && (
-          <div className="mt-4 bg-green-500/20 border border-green-400/30 rounded-xl px-4 py-3">
-            <p className="text-green-300 text-sm font-semibold">✅ Estás al día</p>
-          </div>
-        )}
-        {deudaTotal === 0 && (
-          <div className="mt-4 bg-green-500/20 border border-green-400/30 rounded-xl px-4 py-3">
-            <p className="text-green-300 text-sm font-semibold">🎉 ¡Sin deudas pendientes!</p>
-          </div>
-        )}
+        <p className="text-blue-400 text-xs mt-0.5">Consultado el {fmtFecha(new Date())}</p>
       </div>
 
-      {/* Detalle */}
-      <div className="px-4 py-6 space-y-4">
-        {productosActivos.length > 0 && (
-          <>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-1">Detalle de créditos</p>
-            {productosActivos.map(p => (
-              <div key={p.id} className={`bg-white rounded-2xl p-5 shadow-sm border-l-4
-                ${parseInt(p.cuotas_mora||0)>0 ? 'border-red-400' : 'border-blue-300'}`}>
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-3">
-                    <span className="text-4xl">{tipoIcon[p.tipo]||'📄'}</span>
-                    <div>
-                      <p className="font-bold text-gray-800 text-base">{tipoLabel[p.tipo]||p.tipo}</p>
-                      {p.descripcion_bien && (
-                        <p className="text-xs text-gray-400 mt-0.5">{p.descripcion_bien}</p>
-                      )}
+      {/* ── RESUMEN TOTAL ── */}
+      <div className="mx-4 -mt-1">
+        <div className="bg-white rounded-2xl shadow-lg p-5 border-t-4 border-[#1e3a5f]">
+          <p className="text-xs text-gray-400 uppercase tracking-wide text-center mb-3">Resumen general</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-red-50 rounded-xl p-3 text-center border border-red-100">
+              <p className="text-xs text-gray-500 mb-0.5">Total por pagar</p>
+              <p className="text-xl font-black text-red-600">{fmt(deudaTotal)}</p>
+            </div>
+            <div className="bg-green-50 rounded-xl p-3 text-center border border-green-100">
+              <p className="text-xs text-gray-500 mb-0.5">Total cancelado</p>
+              <p className="text-xl font-black text-green-600">{fmt(pagadoTotal)}</p>
+            </div>
+          </div>
+          <div className="mt-3">
+            {tieneMora && (
+              <div className="bg-red-500 text-white rounded-xl px-4 py-2.5 text-center">
+                <p className="font-bold text-sm">⚠️ Tienes cuotas vencidas sin pagar</p>
+                <p className="text-xs text-red-200 mt-0.5">Comunícate para ponerte al día</p>
+              </div>
+            )}
+            {!tieneMora && deudaTotal > 0 && (
+              <div className="bg-green-500 text-white rounded-xl px-4 py-2.5 text-center">
+                <p className="font-bold text-sm">✅ Estás al día con tus pagos</p>
+              </div>
+            )}
+            {deudaTotal === 0 && (
+              <div className="bg-blue-500 text-white rounded-xl px-4 py-2.5 text-center">
+                <p className="font-bold text-sm">🎉 ¡Sin deudas pendientes!</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── CRÉDITOS ACTIVOS ── */}
+      {productos.length > 0 && (
+        <div className="mx-4 mt-5 space-y-4">
+          <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+            {productos.length} crédito(s) activo(s)
+          </p>
+
+          {productos.map(p => {
+            const pagadas    = parseInt(p.cuotas_pagadas  || 0)
+            const total      = parseInt(p.total_cuotas    || 0)
+            const mora       = parseInt(p.cuotas_mora     || 0)
+            const pendientes = parseInt(p.cuotas_pendientes || 0)
+            const proyectado = parseFloat(p.total_proyectado || 0)
+            const pagado     = parseFloat(p.total_pagado   || 0)
+            const saldo      = parseFloat(p.saldo_total    || 0)
+            const intereses  = parseFloat(p.total_intereses || 0)
+            const progreso   = total > 0 ? Math.round((pagadas / total) * 100) : 0
+            const abierto    = abiertos[p.id]
+
+            return (
+              <div key={p.id} className={`bg-white rounded-2xl shadow-sm overflow-hidden border-l-4
+                ${mora > 0 ? 'border-red-400' : 'border-blue-400'}`}>
+
+                {/* Cabecera del crédito */}
+                <button onClick={() => toggle(p.id)}
+                  className="w-full px-5 pt-5 pb-4 text-left">
+                  <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">{tipoIcon[p.tipo] || '📄'}</span>
+                      <div>
+                        <p className="font-bold text-gray-800">{tipoLabel[p.tipo] || p.tipo}</p>
+                        {p.descripcion_bien && <p className="text-xs text-gray-400">{p.descripcion_bien}</p>}
+                        <p className="text-xs text-gray-400 mt-0.5">Desde {fmtCorta(p.fecha_creacion)}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400">Saldo</p>
+                      <p className="text-lg font-black text-gray-800">{fmt(saldo)}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{abierto ? '▲ menos' : '▼ más'}</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-xl font-bold text-gray-800">{fmt(p.saldo_total||0)}</p>
-                    <p className="text-xs text-gray-400">pendiente</p>
-                  </div>
-                </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <div className="bg-gray-50 rounded-xl p-3 text-center">
-                    <p className="text-xs text-gray-400">Capital</p>
-                    <p className="font-semibold text-gray-700 text-sm mt-0.5">{fmt(p.monto_capital)}</p>
-                  </div>
+                  {/* Barra de progreso */}
                   {p.tipo !== 'fiado' && (
-                    <div className="bg-gray-50 rounded-xl p-3 text-center">
-                      <p className="text-xs text-gray-400">Cuotas</p>
-                      <p className="font-semibold text-gray-700 text-sm mt-0.5">{p.total_cuotas} total</p>
+                    <div className="mt-4">
+                      <div className="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>{pagadas} de {total} cuotas pagadas</span>
+                        <span>{progreso}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5">
+                        <div className="bg-green-500 h-2.5 rounded-full transition-all"
+                          style={{ width: `${progreso}%` }} />
+                      </div>
                     </div>
                   )}
-                </div>
 
-                {parseInt(p.cuotas_mora||0) > 0 && (
-                  <div className="mt-3 bg-red-50 rounded-xl px-4 py-2.5 flex items-center gap-2">
-                    <span className="text-red-500">⚠️</span>
-                    <p className="text-red-600 text-sm font-medium">{p.cuotas_mora} cuota(s) en mora</p>
+                  {/* Alertas rápidas */}
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {mora > 0 && (
+                      <span className="text-xs bg-red-100 text-red-600 px-2 py-1 rounded-full font-semibold">
+                        ⚠️ {mora} cuota(s) vencida(s)
+                      </span>
+                    )}
+                    {p.proxima_fecha && p.tipo !== 'fiado' && (
+                      <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">
+                        📅 Próximo pago: {fmtCorta(p.proxima_fecha)}
+                      </span>
+                    )}
+                  </div>
+                </button>
+
+                {/* Detalle expandible */}
+                {abierto && (
+                  <div className="border-t bg-gray-50 px-5 py-4 space-y-4">
+
+                    {/* KPIs financieros */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-white rounded-xl p-3 text-center border">
+                        <p className="text-xs text-gray-400">Capital prestado</p>
+                        <p className="font-bold text-gray-700 text-sm">{fmt(p.monto_capital)}</p>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 text-center border">
+                        <p className="text-xs text-gray-400">Total a pagar</p>
+                        <p className="font-bold text-indigo-600 text-sm">{fmt(proyectado)}</p>
+                      </div>
+                      <div className="bg-green-50 rounded-xl p-3 text-center border border-green-100">
+                        <p className="text-xs text-gray-400">Ya pagaste</p>
+                        <p className="font-bold text-green-600 text-sm">{fmt(pagado)}</p>
+                      </div>
+                      <div className="bg-red-50 rounded-xl p-3 text-center border border-red-100">
+                        <p className="text-xs text-gray-400">Te falta</p>
+                        <p className="font-bold text-red-600 text-sm">{fmt(saldo)}</p>
+                      </div>
+                    </div>
+
+                    {/* Info del crédito */}
+                    {p.tipo !== 'fiado' && (
+                      <div className="bg-white rounded-xl border p-4 space-y-2 text-sm">
+                        <p className="font-semibold text-gray-600 text-xs uppercase tracking-wide">Condiciones del crédito</p>
+                        <div className="flex justify-between"><span className="text-gray-400">Tasa de interés</span><span className="font-medium">{p.tasa_interes}% {p.periodo_tasa}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-400">Frecuencia de pago</span><span className="font-medium capitalize">{p.frecuencia_cobro}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-400">Total intereses</span><span className="font-medium text-orange-500">{fmt(intereses)}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-400">Cuotas totales</span><span className="font-medium">{total}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-400">Cuotas pagadas</span><span className="font-medium text-green-600">{pagadas} ✓</span></div>
+                        <div className="flex justify-between"><span className="text-gray-400">Cuotas pendientes</span><span className="font-medium text-blue-600">{pendientes}</span></div>
+                        {mora > 0 && <div className="flex justify-between"><span className="text-gray-400">Cuotas vencidas</span><span className="font-bold text-red-600">{mora} ⚠️</span></div>}
+                      </div>
+                    )}
+
+                    {/* Próxima cuota */}
+                    {p.proxima_fecha && p.tipo !== 'fiado' && (
+                      <div className="bg-blue-600 text-white rounded-xl p-4">
+                        <p className="text-xs text-blue-200 uppercase tracking-wide mb-1">Próxima cuota</p>
+                        <div className="flex justify-between items-center">
+                          <p className="font-bold">{fmtFecha(p.proxima_fecha)}</p>
+                          <p className="text-xl font-black">{fmt(p.proxima_valor)}</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── ÚLTIMOS PAGOS ── */}
+      {ultimosPagos.length > 0 && (
+        <div className="mx-4 mt-5">
+          <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3">
+            Últimos pagos registrados
+          </p>
+          <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+            {ultimosPagos.map((pg, i) => (
+              <div key={pg.numero_recibo + i}
+                className={`flex justify-between items-center px-5 py-3.5 ${i > 0 ? 'border-t' : ''}`}>
+                <div>
+                  <p className="text-sm font-semibold text-gray-700">{pg.numero_recibo}</p>
+                  <p className="text-xs text-gray-400">{fmtCorta(pg.fecha_pago)} · Cuota #{pg.numero_cuota} · {pg.metodo_pago}</p>
+                </div>
+                <p className="font-bold text-green-600">{fmt(pg.monto)}</p>
+              </div>
             ))}
-          </>
-        )}
-
-        {productosActivos.length === 0 && (
-          <div className="bg-white rounded-2xl p-10 text-center shadow-sm">
-            <p className="text-5xl mb-3">🎉</p>
-            <p className="font-bold text-gray-700 text-lg">¡Sin deudas!</p>
-            <p className="text-sm text-gray-400 mt-1">No tienes créditos activos</p>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Footer */}
-      <div className="text-center pb-8 px-4">
-        <p className="text-xs text-gray-400">
-          Consulta generada el {new Date().toLocaleDateString('es-CO')} · Inversiones Hnos Liñan
-        </p>
-      </div>
+      {/* ── SIN CRÉDITOS ── */}
+      {productos.length === 0 && (
+        <div className="mx-4 mt-8 bg-white rounded-2xl p-10 text-center shadow-sm">
+          <p className="text-5xl mb-3">🎉</p>
+          <p className="font-bold text-gray-700 text-lg">¡Sin deudas activas!</p>
+          <p className="text-sm text-gray-400 mt-1">No tienes créditos pendientes</p>
+        </div>
+      )}
 
+      {/* ── FOOTER ── */}
+      <div className="text-center mt-8 px-4">
+        <p className="text-xs text-gray-400">Inversiones Hnos Liñán · Información confidencial</p>
+        <p className="text-xs text-gray-300 mt-0.5">Esta consulta es solo para el titular del crédito</p>
+      </div>
     </div>
   )
 }

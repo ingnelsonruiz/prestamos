@@ -8,8 +8,18 @@ function ModalQR({ clienteId, nombre, onClose }) {
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(url)}`
 
   const copiar = () => {
-    navigator.clipboard.writeText(url)
-    alert('¡Enlace copiado!')
+    try {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(url).then(() => alert('¡Enlace copiado!'))
+      } else {
+        const el = document.createElement('textarea')
+        el.value = url; el.style.position = 'fixed'; el.style.opacity = '0'
+        document.body.appendChild(el); el.focus(); el.select()
+        document.execCommand('copy')
+        document.body.removeChild(el)
+        alert('¡Enlace copiado!')
+      }
+    } catch { alert('URL: ' + url) }
   }
 
   return (

@@ -9,6 +9,7 @@ const nav = [
   { href: '/prestamos',  label: 'Préstamos',  icon: '💰' },
   { href: '/cobros',     label: 'Cobros',     icon: '💳' },
   { href: '/empenos',    label: 'Empeños',    icon: '🔒' },
+  { href: '/recibos',    label: 'Recibos',    icon: '🧾' },
   { href: '/informes',   label: 'Informes',   icon: '📊' },
 ]
 

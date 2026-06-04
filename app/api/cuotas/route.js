@@ -13,8 +13,9 @@ export async function GET(request) {
 
     let sql = `
       SELECT cu.*,
-             c.nombre AS nombre_cliente,
-             p.tipo   AS tipo_producto,
+             c.nombre    AS nombre_cliente,
+             c.telefono  AS telefono_cliente,
+             p.tipo      AS tipo_producto,
              p.descripcion_bien,
              GREATEST(0, CURRENT_DATE - cu.fecha_vencimiento) AS dias_mora
       FROM ${S}.cred_cuotas cu
