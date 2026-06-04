@@ -68,11 +68,17 @@ export default function PrestamosPage() {
                   <span className="font-semibold text-gray-800">{cli.nombre}</span>
                   <span className="ml-2 text-xs text-gray-400">{cli.documento}</span>
                 </div>
-                <div className="text-right">
+                <div className="flex items-center gap-4">
+                  <Link href={`/prestamos/nuevo?cliente=${cli.items[0]?.cliente_id}`}
+                    className="text-xs bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700 font-medium whitespace-nowrap">
+                    + Nuevo crédito
+                  </Link>
+                  <div className="text-right">
                   <span className="text-sm text-gray-500">Deuda total: </span>
                   <span className="font-bold text-red-600 text-xl">
                     {fmt(cli.items.filter(p=>!['saldado','refinanciado'].includes(p.estado)).reduce((s,p)=>s+parseFloat(p.capital_pendiente||0),0))}
                   </span>
+                  </div>
                 </div>
               </div>
 
