@@ -10,12 +10,19 @@
 
 Aplicación full-stack para administrar la cartera crediticia de una empresa prestamista. Permite:
 
-- Registrar clientes y asociarles productos financieros (préstamos, empeños, ventas a crédito, fiados).
+- Registrar clientes y asociarles productos financieros (préstamos, empeños, ventas a crédito, fiados, adelantos).
 - Generar automáticamente el plan de cuotas según método de amortización seleccionado.
 - Registrar pagos, emitir recibos numerados consecutivamente y actualizar el saldo de caja.
 - Hacer seguimiento de mora, cartera vencida y empeños próximos a vencer.
 - Auditar cada acción del sistema con usuario, fecha e IP.
-- Consulta pública del estado de cuenta de un cliente (sin autenticación).
+- Consulta pública del estado de cuenta de un cliente (sin autenticación) con QR.
+- Migración masiva desde Excel (plantillas descargables).
+- Liquidación anticipada con valor acordado.
+- Conversión de cuenta abierta a préstamo con cuotas.
+- Módulo de recibos con búsqueda por número.
+- Arqueo del día en cobros.
+- Calificación del cliente (Bronce / Plata / Oro / Diamante).
+- Modo prueba para fechas futuras en pagos (configurable desde Migración).
 
 ---
 
@@ -41,40 +48,47 @@ Aplicación full-stack para administrar la cartera crediticia de una empresa pre
 ```
 Programa_Creditos/
 ├── app/
-│   ├── api/                   # API Routes (Route Handlers)
+│   ├── api/
 │   │   ├── auth/login|logout|me/
 │   │   ├── clientes/[id]/
 │   │   ├── productos/[id]/
+│   │   │   └── liquidar/          # POST liquidación anticipada
 │   │   ├── cuotas/
 │   │   ├── pagos/
 │   │   ├── dashboard/
-│   │   ├── estado/[id]/       # PÚBLICO - saldo cliente
+│   │   ├── estado/[id]/           # PÚBLICO
 │   │   ├── informes/
+│   │   ├── recibos/               # Búsqueda por número de recibo
+│   │   ├── migracion/             # POST importación masiva
+│   │   │   └── reset/             # POST limpiar datos de prueba
+│   │   ├── config/modo-prueba/    # GET/POST toggle fechas futuras
 │   │   ├── usuarios/[id]/
 │   │   └── auditoria/
-│   ├── login/                 # Ruta pública
+│   ├── login/
 │   ├── clientes/[id]/
 │   ├── prestamos/[id]/ nuevo/
 │   ├── cobros/
 │   ├── empenos/
-│   ├── estado/[id]/           # PÚBLICO - vista cliente
+│   ├── recibos/                   # Módulo búsqueda de recibos
+│   ├── estado/[id]/               # PÚBLICO
 │   ├── informes/
+│   ├── migracion/                 # Migración masiva + zona desarrollo
 │   ├── usuarios/
 │   ├── auditoria/
-│   └── page.js                # Dashboard principal
+│   └── page.js                    # Dashboard principal
 ├── components/
-│   ├── Sidebar.jsx            # Navegación escritorio
-│   ├── BottomNav.jsx          # Navegación móvil
-│   ├── LayoutWrapper.jsx      # Wrapper con auth guard
-│   └── KPICard.jsx            # Tarjeta de métrica
+│   ├── Sidebar.jsx
+│   ├── BottomNav.jsx
+│   ├── LayoutWrapper.jsx          # Banner modo prueba global
+│   └── KPICard.jsx
 ├── lib/
-│   ├── db.js                  # Pool PostgreSQL
-│   ├── auth.js                # JWT: crearToken, verificarToken
-│   ├── calculos.js            # Motor financiero (cuotas, amortización)
-│   └── auditoria.js           # Logger de auditoría + constantes
-├── middleware.js              # Protección global de rutas (JWT)
-├── .env.local                 # Variables de entorno (no commitear)
-└── *.sql                      # Migraciones numeradas
+│   ├── db.js
+│   ├── auth.js
+│   ├── calculos.js
+│   └── auditoria.js
+├── middleware.js
+├── .env.local
+└── *.sql                          # Migraciones 03..09
 ```
 
 ---
@@ -97,17 +111,13 @@ Todas las tablas usan el prefijo `cred_` y el esquema `administrativo`. En el c�
 | direccion | TEXT | nullable |
 | email | TEXT | nullable |
 
-**Estado calculado** (no almacenado): se deriva en query JOIN → `sin_prestamos`, `activo`, `en_mora`.
-
 #### `cred_productos`
-Representa cualquier operación financiera activa.
-
 | Campo | Tipo | Notas |
 |-------|------|-------|
 | id | TEXT PK | UUID v4 |
-| cliente_id | TEXT FK | → cred_clientes |
-| tipo | TEXT | `prestamo`, `venta`, `empeno`, `fiado` |
-| monto_capital | NUMERIC | Capital financiado (ya descontada cuota_inicial) |
+| cliente_id | TEXT FK | |
+| tipo | TEXT | `prestamo`, `venta`, `empeno`, `fiado`, `adelanto` |
+| monto_capital | NUMERIC | Capital financiado |
 | tasa_interes | NUMERIC | Tasa en % |
 | periodo_tasa | TEXT | `diario`, `semanal`, `quincenal`, `mensual`, `anual` |
 | frecuencia_cobro | TEXT | `diario`, `semanal`, `quincenal`, `mensual` |
@@ -115,37 +125,37 @@ Representa cualquier operación financiera activa.
 | fecha_primer_pago | DATE | |
 | con_interes | BOOLEAN | |
 | metodo_calculo | TEXT | `plano` o `frances` |
-| cuota_inicial | NUMERIC | Enganche/pie |
-| descripcion_bien | TEXT | Empeños y ventas |
+| cuota_inicial | NUMERIC | |
+| descripcion_bien | TEXT | |
 | valor_comercial_bien | NUMERIC | Empeños |
 | fecha_limite_rescate | DATE | Empeños |
 | estado | TEXT | `activo`, `al_dia`, `en_mora`, `saldado`, `decomisado`, `refinanciado` |
-| es_refinanciacion_de | TEXT | ID del crédito refinanciado |
-| refinanciado_por | TEXT | ID del nuevo crédito |
+| es_refinanciacion_de | TEXT | |
+| refinanciado_por | TEXT | |
 | notas | TEXT | |
 | fecha_creacion | TIMESTAMP | |
 
-#### `cred_cuotas`
-Plan de pagos generado automáticamente al crear un producto.
+**Tipos especiales:**
+- `fiado` y `adelanto`: cuenta abierta, 1 cuota con `fecha_vencimiento='2099-12-31'`, tasa=0.
+- `adelanto`: igual que fiado pero para anticipos sin interés (empleados, medicina, emergencias). La descripción_bien documenta el motivo.
 
-| Campo | Tipo | Notas |
-|-------|------|-------|
-| id | TEXT PK | UUID v4 |
-| producto_id | TEXT FK | |
-| cliente_id | TEXT FK | |
-| numero_cuota | INTEGER | 1..n |
-| fecha_vencimiento | DATE | Calculada por lib/calculos.js |
-| monto_cuota | NUMERIC | Total a pagar |
-| abono_interes | NUMERIC | Porción de interés |
-| abono_capital | NUMERIC | Porción de capital |
-| saldo_pendiente | NUMERIC | Saldo tras esta cuota |
-| monto_pagado | NUMERIC | Acumulado pagado |
-| dias_mora | INTEGER | Calculado en cobro |
-| estado | TEXT | `pendiente`, `parcial`, `pagada`, `mora` |
+#### `cred_cuotas`
+| Campo | Tipo |
+|-------|------|
+| id | TEXT PK |
+| producto_id | TEXT FK |
+| cliente_id | TEXT FK |
+| numero_cuota | INTEGER |
+| fecha_vencimiento | DATE |
+| monto_cuota | NUMERIC |
+| abono_interes | NUMERIC |
+| abono_capital | NUMERIC |
+| saldo_pendiente | NUMERIC |
+| monto_pagado | NUMERIC |
+| dias_mora | INTEGER |
+| estado | TEXT — `pendiente`, `parcial`, `pagada`, `mora` |
 
 #### `cred_pagos`
-Registro histórico de cada transacción de pago.
-
 | Campo | Tipo | Notas |
 |-------|------|-------|
 | id | TEXT PK | |
@@ -153,26 +163,24 @@ Registro histórico de cada transacción de pago.
 | producto_id | TEXT FK | |
 | cliente_id | TEXT FK | |
 | monto | NUMERIC | |
-| fecha_pago | TIMESTAMP | No puede ser futura |
-| metodo_pago | TEXT | `efectivo`, etc. |
+| fecha_pago | TIMESTAMP | Puede ser futura en modo prueba |
+| metodo_pago | TEXT | `efectivo`, `transferencia`, `nequi`, `daviplata`, `otro` |
 | notas | TEXT | |
 | numero_recibo | TEXT | Formato `REC-000001` |
-| usuario_nombre | TEXT | Quién registró el pago |
+| usuario_nombre | TEXT | |
 
 #### `cred_usuarios`
-| Campo | Tipo | Notas |
-|-------|------|-------|
-| id | TEXT PK | |
-| nombre | TEXT | |
-| usuario | TEXT UNIQUE | Login |
-| password_hash | TEXT | bcrypt |
-| rol | TEXT | `admin` o `operador` |
-| activo | BOOLEAN | |
-| ultimo_acceso | TIMESTAMP | |
+| Campo | Tipo |
+|-------|------|
+| id | TEXT PK |
+| nombre | TEXT |
+| usuario | TEXT UNIQUE |
+| password_hash | TEXT |
+| rol | TEXT — `admin` o `operador` |
+| activo | BOOLEAN |
+| ultimo_acceso | TIMESTAMP |
 
 #### `cred_auditoria`
-Traza completa de acciones del sistema.
-
 | Campo | Tipo |
 |-------|------|
 | id | TEXT PK |
@@ -185,277 +193,301 @@ Traza completa de acciones del sistema.
 | ip | TEXT |
 | fecha | TIMESTAMP |
 
-Índices: `fecha DESC`, `usuario_id`, `modulo`.
-
 #### `cred_movimientos_caja`
-Flujo de caja: desembolsos (-) y cobros (+).
-
 | Campo | Tipo | Notas |
 |-------|------|-------|
 | id | TEXT PK | |
 | tipo | TEXT | `desembolso`, `cobro_capital` |
 | monto | NUMERIC | Negativo en desembolso |
 | concepto | TEXT | |
-| referencia_id | TEXT | ID pago o producto |
-| saldo_acumulado | NUMERIC | Saldo corriente |
+| referencia_id | TEXT | |
+| saldo_acumulado | NUMERIC | |
 | fecha | TIMESTAMP | |
 
 #### `cred_configuracion`
-Pares clave-valor para configuración del sistema.
+| Campo | Tipo |
+|-------|------|
+| id | TEXT PK — UUID v4 |
+| clave | TEXT |
+| valor | TEXT |
+| actualizado_en | TIMESTAMP |
 
+**Claves registradas:**
 | Clave | Uso |
 |-------|-----|
-| `recibo_consecutivo` | Contador autoincremental de recibos (REC-XXXXXX) |
+| `recibo_consecutivo` | Contador de recibos (REC-XXXXXX) |
+| `modo_prueba` | `'true'`/`'false'` — permite fechas futuras en pagos |
 
 ---
 
 ## 5. Lógica Financiera (`lib/calculos.js`)
 
-### Períodos disponibles
 ```js
 const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 ```
 
-### Conversión de tasas
+### Método Plano
+- Conversión proporcional: `tasa_periodo = (tasa% / 100) * (días_destino / días_origen)`
+- Cuota constante, interés siempre sobre capital inicial.
 
-```js
-convertirTasa(tasa, periodoOrigen, periodoDestino)
-// Usa equivalencia efectiva: (1 + i)^(d2/d1) - 1
-```
+### Método Francés
+- Conversión efectiva compuesta: `(1 + i)^(d2/d1) - 1`
+- Cuota fija: `P * i*(1+i)^n / ((1+i)^n - 1)`
 
-### Método Plano (Interés Simple)
-
-- Conversión **proporcional** (lineal): `tasa_periodo = (tasa% / 100) * (días_destino / días_origen)`
-- El interés se calcula siempre sobre el capital inicial.
-- La cuota es constante; el residuo de centavos se suma a la primera cuota.
-- El saldo disminuye linealmente.
-
-```js
-calcularInteresPlano(productoId, clienteId, P, tasaPct, periodoTasa, frecuenciaCobro, n, fechaPrimerPago)
-```
-
-### Método Francés (Amortización Francesa)
-
-- Conversión **efectiva** (compuesta): usa `convertirTasa`.
-- Cuota fija calculada con la fórmula estándar: `P * i*(1+i)^n / ((1+i)^n - 1)`.
-- El interés decrece cuota a cuota; el abono a capital aumenta.
-
-```js
-calcularFrances(productoId, clienteId, P, tasaPct, periodoTasa, frecuenciaCobro, n, fechaPrimerPago)
-```
-
-### Tipo Fiado
+### Fiado y Adelanto
 - Sin interés, sin cuotas múltiples.
-- Se crea una única cuota con `fecha_vencimiento = '2099-12-31'` (cuenta abierta).
-- Se puede abonar parcialmente.
+- 1 cuota con `fecha_vencimiento = '2099-12-31'`.
 
-### Cálculo de fechas de vencimiento
-Se usa hora local (no UTC) para evitar desfases de zona horaria. El algoritmo incrementa por cuota según la frecuencia:
-- `diario` → +1 día por cuota
-- `semanal` → +7 días
-- `quincenal` → +15 días
-- `mensual` → +1 mes (setMonth)
+### Fechas de vencimiento
+- Se usan fechas locales (no UTC) con `split('-')` para evitar desfase.
+- **IMPORTANTE**: `fecha_primer_pago` viene de PostgreSQL como objeto `Date`. Se convierte a string `YYYY-MM-DD` antes de llamar `generarCuotas()`.
 
 ---
 
 ## 6. API Endpoints
 
-Todas las rutas (excepto `/login`, `/estado/*`, `/api/auth/*`, `/api/estado/*`) requieren cookie `itl_session` válida.
-
 ### Autenticación
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| POST | `/api/auth/login` | Login: valida usuario+password, crea JWT, setea cookie |
-| POST | `/api/auth/logout` | Elimina cookie |
-| GET | `/api/auth/me` | Devuelve payload del token actual |
+| Método | Ruta |
+|--------|------|
+| POST | `/api/auth/login` |
+| POST | `/api/auth/logout` |
+| GET | `/api/auth/me` |
 
 ### Clientes
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/clientes?q=` | Lista con estado calculado y mora. Búsqueda por nombre o documento |
-| POST | `/api/clientes` | Crea cliente. Campos req: `documento`, `nombre` |
-| GET | `/api/clientes/[id]` | Detalle del cliente |
-| PUT | `/api/clientes/[id]` | Actualiza datos del cliente |
-| DELETE | `/api/clientes/[id]` | Elimina si no tiene productos activos |
+| Método | Ruta |
+|--------|------|
+| GET | `/api/clientes?q=` |
+| POST | `/api/clientes` |
+| GET/PUT/DELETE | `/api/clientes/[id]` |
 
-### Productos (Préstamos/Empeños/Ventas/Fiados)
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/productos?cliente_id=` | Lista productos con métricas de cuotas |
-| POST | `/api/productos` | Crea producto + genera cuotas + registra desembolso en caja |
-| GET | `/api/productos/[id]` | Detalle con cuotas y pagos |
-| PUT | `/api/productos/[id]` | Actualiza datos del producto |
+**La API `/api/clientes/[id]` GET devuelve** productos con: `total_cuotas`, `cuotas_pagadas`, `cuotas_pendientes`, `cuotas_mora`, `saldo_total`.
 
-**Refinanciación**: Si el body incluye `es_refinanciacion_de`, al crear el nuevo producto se cierra el original con estado `refinanciado`.
+### Productos
+| Método | Ruta | Notas |
+|--------|------|-------|
+| GET | `/api/productos?cliente_id=` | Incluye `telefono`, `direccion` del cliente |
+| POST | `/api/productos` | Fiado y adelanto: cuenta abierta. Otros: genera cuotas. |
+| GET/PUT | `/api/productos/[id]` | |
+| POST | `/api/productos/[id]/liquidar` | Liquidación anticipada con valor acordado |
+
+**GROUP BY en `/api/productos` GET**: `p.id, c.nombre, c.documento, c.telefono, c.direccion`
 
 ### Cuotas
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/cuotas?estado=&cliente_id=&producto_id=` | Lista cuotas filtradas. `estado=mora` usa lógica por fecha |
+| Método | Ruta | Notas |
+|--------|------|-------|
+| GET | `/api/cuotas?estado=&cliente_id=&producto_id=` | Incluye `telefono_cliente`, `fecha_creacion`, `monto_capital` del producto |
 
 ### Pagos
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| POST | `/api/pagos` | Registra pago: actualiza cuota, genera recibo, mueve caja. Valida fecha no futura |
-| GET | `/api/pagos?producto_id=&cliente_id=` | Historial de pagos |
+| Método | Ruta | Notas |
+|--------|------|-------|
+| POST | `/api/pagos` | Valida fecha futura solo si `modo_prueba != 'true'` |
+| GET | `/api/pagos?producto_id=&cliente_id=&fecha=` | `fecha=YYYY-MM-DD` para arqueo |
 
 ### Dashboard
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/dashboard` | KPIs + cuotas hoy + cuotas semana + empeños próximos a vencer + últimos movimientos caja |
+`GET /api/dashboard` devuelve KPIs:
+- `capital_en_calle`, `intereses_ganados`, `clientes_en_mora`, `recaudo_hoy`, `cartera_vencida_30d`
+- `total_invertido`, `num_creditos`, `total_recuperado` ← **KPIs históricos**
+- `cuotas_hoy`, `cuotas_semana`, `empenos_vencer`, `movimientos_caja`
 
-**KPIs retornados:**
-- `capital_en_calle`: suma saldos pendientes de cuotas activas
-- `intereses_ganados`: suma abono_interes de cuotas pagadas
-- `clientes_en_mora`: clientes distintos con al menos una cuota en mora
-- `recaudo_hoy`: suma pagos del día
-- `cartera_vencida_30d`: saldo de cuotas en mora con +30 días vencidas
+### Recibos
+| Método | Ruta | Notas |
+|--------|------|-------|
+| GET | `/api/recibos?q=REC-000001` | Búsqueda flexible por número |
 
-### Informes
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/informes?desde=&hasta=&tipo=intereses` | Resumen mensual + detalle de pagos en el período |
+### Migración
+| Método | Ruta | Notas |
+|--------|------|-------|
+| POST | `/api/migracion` | Importación masiva. Crea clientes + saldos como cuentas abiertas |
+| POST | `/api/migracion/reset` | Borra préstamos, cuotas, pagos y caja. Conserva clientes y usuarios |
+
+### Config
+| Método | Ruta | Notas |
+|--------|------|-------|
+| GET | `/api/config/modo-prueba` | Devuelve `{ activo: bool }` |
+| POST | `/api/config/modo-prueba` | Body: `{ activo: bool }`. DELETE + INSERT con UUID |
 
 ### Estado (PÚBLICO)
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/estado/[id]` | Saldo del cliente: nombre, documento, productos activos con saldo. Sin datos sensibles |
-
-### Usuarios
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/usuarios` | Lista usuarios (solo admin) |
-| POST | `/api/usuarios` | Crea usuario con bcrypt hash |
-| PUT | `/api/usuarios/[id]` | Edita / cambia contraseña / activa o desactiva |
-
-### Auditoría
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/auditoria` | Log paginado con filtros por módulo/usuario/fecha |
+`GET /api/estado/[id]` — devuelve: nombre, documento, productos con métricas completas, últimos 10 pagos.
 
 ---
 
 ## 7. Autenticación y Seguridad
 
-### Flujo de autenticación
-1. Usuario POST `/api/auth/login` → se verifica `bcrypt.compare(password, hash)`.
-2. Se genera JWT HS256 con `jose` (expiración 8 h).
-3. JWT se almacena en cookie HttpOnly `itl_session`.
-4. El middleware `middleware.js` verifica el token en **cada request** antes de llegar a las rutas.
-
-### Rutas públicas (no requieren token)
-```
-/login, /estado/*, /api/auth/*, /api/estado/*
-```
-
-### Roles
-- `admin`: acceso total, gestión de usuarios.
-- `operador`: operaciones del día a día (clientes, préstamos, cobros).
-
-### Variables de entorno (`.env.local`)
-```
-DB_HOST=<ip>
-DB_PORT=5435
-DB_NAME=base_sie_dusakawi
-DB_USER=postgres
-DB_PASSWORD=<password>
-DB_SCHEMA=administrativo
-JWT_SECRET=<secret>   # default: 'inversiones-tata-linan-secret-2026'
-```
+- JWT HS256 con `jose`, cookie HttpOnly `itl_session` (8h).
+- Rutas públicas: `/login`, `/estado/*`, `/api/auth/*`, `/api/estado/*`.
+- Roles: `admin` (acceso total) / `operador` (operación diaria).
+- Variables `.env.local`: `DB_HOST`, `DB_PORT=5435`, `DB_NAME=base_sie_dusakawi`, `DB_USER`, `DB_PASSWORD`, `DB_SCHEMA=administrativo`, `JWT_SECRET`.
 
 ---
 
-## 8. Flujo de Negocio Principal
+## 8. Flujos de Negocio
 
-### Crear un préstamo
-```
-1. Seleccionar cliente (o crear uno nuevo)
-2. Elegir tipo: prestamo | venta | empeno | fiado
-3. Ingresar: monto_capital, tasa, periodo_tasa, frecuencia_cobro, num_cuotas, fecha_primer_pago, metodo_calculo
-4. POST /api/productos → genera cuotas automáticamente → registra desembolso en caja
-```
+### Crear préstamo
+`POST /api/productos` → genera cuotas → registra desembolso en caja.
 
-### Registrar un pago
-```
-1. Identificar cuota (por cliente o por fecha de vencimiento)
-2. POST /api/pagos { cuota_id, monto, metodo_pago, fecha_pago? }
-3. Sistema: actualiza monto_pagado en cuota → calcula estado (parcial/pagada)
-   → genera numero_recibo correlativo → mueve caja → si no quedan pendientes → producto = 'saldado'
-```
+### Fiado / Adelanto
+`POST /api/productos` con `tipo='fiado'` o `tipo='adelanto'` → 1 cuota abierta `2099-12-31`.
 
-### Refinanciar un crédito
-```
-1. POST /api/productos con es_refinanciacion_de = <id_credito_original>
-2. El crédito original queda en estado 'refinanciado' y campo refinanciado_por = <nuevo_id>
-3. Se genera el nuevo plan de cuotas normalmente
-```
+### Registrar pago
+`POST /api/pagos` → actualiza cuota → genera recibo → mueve caja → si sin pendientes → producto `saldado`.
+
+### Liquidación anticipada
+`POST /api/productos/[id]/liquidar` con `{ monto_acordado, metodo_pago, notas, fecha_pago }`:
+- Valida `monto_acordado >= saldo_capital_pendiente` (no se puede condonar capital).
+- Cierra todas las cuotas pendientes → producto `saldado` → recibo con nota "LIQUIDACIÓN ANTICIPADA".
+
+### Convertir cuenta abierta a préstamo
+Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** → usa el flujo de refinanciación (`es_refinanciacion_de`) → genera nuevo préstamo con cuotas.
+
+### Refinanciar
+`POST /api/productos` con `es_refinanciacion_de=<id>` → cierra original con estado `refinanciado`.
+
+### Migración masiva
+1. Descargar plantilla Excel (3 tipos: Solo Clientes, Clientes+Deudas, Solo Saldos).
+2. Subir archivo → validar → preview → importar.
+3. Crea clientes (upsert por documento) + saldos como cuentas abiertas.
 
 ---
 
 ## 9. Migraciones SQL
 
-Ejecutar en orden sobre la BD:
-
 | Archivo | Descripción |
 |---------|-------------|
-| `03_alter_refinanciacion.sql` | Agrega columnas `refinanciado_por` y `es_refinanciacion_de` a `cred_productos`; actualiza CHECK de estados |
-| `04_limpiar_datos_prueba.sql` | Borra todos los datos operativos (mantiene estructura y usuarios) |
-| `05_alter_fiado.sql` | Agrega tipo `fiado` al CHECK de `cred_productos.tipo` |
-| `06_crear_usuarios.sql` | Crea tabla `cred_usuarios` + usuario admin inicial (pass: `admin123`) |
-| `07_crear_auditoria.sql` | Crea tabla `cred_auditoria` con índices |
-| `08_alter_pagos_usuario.sql` | Agrega columna `usuario_nombre` a `cred_pagos` |
+| `03_alter_refinanciacion.sql` | Columnas `refinanciado_por`, `es_refinanciacion_de` |
+| `04_limpiar_datos_prueba.sql` | Borra datos operativos |
+| `05_alter_fiado.sql` | Agrega tipo `fiado` |
+| `06_crear_usuarios.sql` | Tabla usuarios + admin inicial |
+| `07_crear_auditoria.sql` | Tabla auditoría con índices |
+| `08_alter_pagos_usuario.sql` | Columna `usuario_nombre` en pagos |
+| `09_agregar_adelanto.sql` | Agrega tipo `adelanto` al CHECK |
 
 ---
 
-## 10. Componentes UI Clave
+## 10. Módulos del Sistema
 
-### `KPICard.jsx`
-Tarjeta de métrica para el dashboard. Props: `titulo`, `valor`, `icono`, `color`, `alerta`.
+### Dashboard (`/`)
+- KPIs históricos: Total invertido, Total recuperado, Capital en la calle.
+- KPIs operativos: Intereses ganados, Clientes en mora, Recaudo del día, Cartera vencida +30d.
+- Listas: Cuotas hoy, Cuotas semana, Empeños próximos a vencer.
 
-### `Sidebar.jsx`
-Navegación lateral para escritorio con links a todas las secciones.
+### Clientes (`/clientes`)
+- Hero card blanco con barra de acento de color (rojo=mora, azul=activo, verde=sin deuda).
+- Tabs de filtro con colores: Activos (navy), Saldados (verde), Refinanciados (morado), Todos (gris).
+- QR del estado de cuenta con opciones: Copiar QR, Descargar QR, Copiar enlace, Ver página, Enviar por WhatsApp.
 
-### `BottomNav.jsx`
-Barra de navegación inferior para móvil.
+### Préstamos (`/prestamos`)
+- Agrupado por cliente con: nombre, teléfono (chip verde), dirección.
+- Chips de refinanciación en columna de estado.
 
-### `LayoutWrapper.jsx`
-Wrapper que aplica el layout (sidebar + contenido) y actúa como guard de autenticación en el cliente.
+### Detalle del crédito (`/prestamos/[id]`)
+- KPIs: Capital desembolsado, Intereses totales, **Total proyectado**, Cobrado, Saldo pendiente, **Saldo solo capital**, Avance cuotas.
+- Barra de progreso bicolor: verde (pagadas) + amarillo (parciales).
+- Calificación del cliente: Bronce (0-40) / Plata (41-65) / Oro (66-85) / Diamante (86-100).
+  - `null` si no hay historial de pagos → muestra "Sin historial aún".
+- Botones: Editar, Eliminar, **Convertir a préstamo** (fiado/adelanto), **Liquidar crédito**, Refinanciar.
+
+### Cobros (`/cobros`)
+- Filtros: Todas, En mora, Hoy, Semana, Rango.
+- Acordeón por crédito: nombre (grande), tipo+descripción (bold), fecha del préstamo, capital, teléfono.
+- Cuando hay mora: chip rojo + botón WhatsApp de cobro con mensaje pre-cargado.
+- **Arqueo del día**: programado vs cobrado, barra de progreso, por método, lista de pagos del día.
+
+### Recibos (`/recibos`)
+- Búsqueda por `REC-000001` o solo el número (`1`).
+- Tarjeta completa: datos del cliente, producto, cuota, desglose capital/interés.
+- Botón imprimir con layout de tiquete de caja.
+
+### Informes (`/informes`)
+- KPIs históricos globales (Total invertido, Total recuperado, Capital en la calle).
+- KPIs del período: recaudado, intereses, capital, pagos, clientes.
+- Resumen mensual + detalle de pagos.
+- Exportar Excel con 3 hojas: Resumen, Por mes, Detalle.
+
+### Migración (`/migracion`)
+- 3 plantillas Excel descargables con instrucciones.
+- Subida con validación y vista previa (primeros 10 registros).
+- **Zona de desarrollo**:
+  - Toggle **Modo prueba** (fechas futuras en pagos) — persiste en BD.
+  - Botón **Limpiar datos de prueba** con triple confirmación (escribir "LIMPIAR").
 
 ---
 
-## 11. Convenciones de Código
+## 11. Calificación del Cliente
 
-- Todos los Route Handlers usan `const S = 'administrativo'` para el nombre del esquema.
-- IDs generados siempre con `uuidv4()` en la capa de aplicación (no en BD).
-- Fechas manipuladas en **zona horaria local** con parsing manual `split('-')` para evitar desfase UTC.
-- Formato de moneda: `Intl.NumberFormat('es-CO', { style:'currency', currency:'COP' })`.
-- Auditoría registrada en **todos** los endpoints mutantes (crear, editar, pagar, refinanciar).
-- Errores de BD retornan `{ error: error.message }` con status 500.
-- Conflicto de documento único retorna status 409.
+Calculada en el frontend a partir de las cuotas del crédito activo:
+
+```js
+// Solo evalúa cuotas con actividad real (pagadas, parciales, o vencidas)
+evaluables = cuotas con pagos O con fecha_vencimiento <= hoy (excluye 2099)
+if (!hayPagos || evaluables.length === 0) return null // Sin historial
+
+score = ((pagadas * 1.0) + (parciales * 0.5)) / evaluables.length * 100
+if (refinanciado) score -= 20
+```
+
+| Rango | Nivel | Color |
+|-------|-------|-------|
+| null | Sin historial | Gris |
+| 0-40 | 🥉 Bronce | Naranja |
+| 41-65 | 🥈 Plata | Gris |
+| 66-85 | 🥇 Oro | Amarillo |
+| 86-100 | 💎 Diamante | Cian |
 
 ---
 
-## 12. Comandos de Desarrollo
+## 12. Liquidación Anticipada
+
+`POST /api/productos/[id]/liquidar`:
+- **Validación**: `monto_acordado >= saldo_capital_pendiente` (se puede condonar intereses, NO capital).
+- Registra 1 pago por `monto_acordado` con nota "LIQUIDACIÓN ANTICIPADA".
+- Cierra todas las cuotas pendientes (`estado='pagada'`).
+- Producto → `saldado`.
+- Registra descuento en auditoría.
+
+---
+
+## 13. Modo Prueba
+
+Controlado por `cred_configuracion.clave='modo_prueba'`.
+
+- **Activar/desactivar**: `/migracion` → Zona de desarrollo → Toggle.
+- **Persistencia**: DELETE + INSERT con UUID en BD.
+- **Efecto**: La API `/api/pagos` omite la validación de fecha futura.
+- **Indicador visual**: Banner amarillo en toda la app (`LayoutWrapper.jsx`).
+- **No afecta** otras validaciones del sistema.
+
+---
+
+## 14. Convenciones de Código
+
+- `const S = 'administrativo'` en todos los Route Handlers.
+- IDs generados con `uuidv4()` en la capa de aplicación.
+- Fechas en **zona horaria local** con `split('-')`.
+- `fecha_primer_pago` de PostgreSQL → convertir a string antes de `generarCuotas()`.
+- Formato moneda: `Intl.NumberFormat('es-CO', { style:'currency', currency:'COP' })`.
+- Auditoría en todos los endpoints mutantes.
+- Errores BD: `{ error: error.message }` status 500.
+- Documento duplicado: status 409.
+
+---
+
+## 15. Comandos de Desarrollo
 
 ```bash
-# Instalar dependencias
 npm install
-
-# Servidor de desarrollo
-npm run dev          # http://localhost:3000
-
-# Build de producción
+npm run dev    # http://localhost:3000
 npm run build
 npm start
 ```
 
 ---
 
-## 13. Puntos de Extensión / Mejoras Pendientes
+## 16. Puntos de Extensión / Mejoras Pendientes
 
-- **Mora automática**: no hay job que actualice `estado='mora'` en cuotas vencidas; actualmente se detecta por comparación de fechas en las queries.
-- **Notificaciones**: no implementadas; candidato natural para WebSockets o cron + SMS/WhatsApp.
-- **Multiempresa**: el esquema `administrativo` es fijo; para multitenancy habría que parametrizar el esquema.
-- **Tipo `venta`**: el flujo es igual al de `prestamo`; se podría diferenciar con lógica de inventario.
-- **Recibo PDF**: actualmente solo se genera el número; el frontend podría renderizar un recibo imprimible con `window.print()`.
-- **Tests**: no hay suite de pruebas; prioridad: tests de `lib/calculos.js` (lógica financiera crítica).
+- **Mora automática**: no hay job que actualice `estado='mora'`; se detecta por comparación de fechas en queries.
+- **Notificaciones**: candidato para cron + SMS/WhatsApp.
+- **Multiempresa**: esquema fijo `administrativo`; para multitenancy parametrizar.
+- **Tests**: sin suite de pruebas; prioridad en `lib/calculos.js`.
+- **Recibo PDF**: número generado, falta layout imprimible completo.
+- **Modo prueba**: desactivar antes de pasar a producción real.
+- **Tipo `venta`**: mismo flujo que préstamo; se podría diferenciar con inventario.

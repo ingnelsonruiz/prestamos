@@ -165,8 +165,17 @@ export default function DetallePrestamo() {
     return vence < hoyStr && c.estado !== 'pagada'
   }).length || 0
   // Saldo SOLO de capital pendiente (sin intereses futuros) — referencia para liquidar
+  // Para cuotas parciales: descuenta proporcionalmente lo ya pagado
   const saldoCapitalPendiente = data.cuotas?.filter(c => c.estado !== 'pagada')
-    .reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0
+    .reduce((s,c) => {
+      const montoCuota   = parseFloat(c.monto_cuota || 0)
+      const montoPagado  = parseFloat(c.monto_pagado || 0)
+      const abonoCapital = parseFloat(c.abono_capital || 0)
+      if (montoCuota <= 0) return s
+      // Proporción que falta por pagar
+      const proporcionPendiente = Math.max(0, (montoCuota - montoPagado) / montoCuota)
+      return s + (abonoCapital * proporcionPendiente)
+    }, 0) || 0
   const puedeEditar     = !data.tiene_pagos
 
   // ── Score de comportamiento de pago ───────────────────────────────────────
@@ -489,13 +498,16 @@ export default function DetallePrestamo() {
               <th className="text-right px-4 py-3">Capital</th>
               <th className="text-right px-4 py-3">Interés</th>
               <th className="text-right px-4 py-3">Pagado</th>
+              <th className="text-right px-4 py-3">Pendiente</th>
               <th className="text-left px-4 py-3">Estado</th>
               <th className="text-left px-4 py-3">Mora</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {(data.cuotas||[]).map(c => (
-              <tr key={c.id} className={`hover:bg-gray-50 ${c.estado==='mora'?'bg-red-50':c.estado==='pagada'?'bg-green-50/30':''}`}>
+            {(data.cuotas||[]).map(c => {
+              const pend = Math.max(0, parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0))
+              return (
+              <tr key={c.id} className={`hover:bg-gray-50 ${c.estado==='mora'?'bg-red-50':c.estado==='pagada'?'bg-green-50/30':c.estado==='parcial'?'bg-yellow-50/40':''}`}>
                 <td className="px-4 py-2.5 font-medium">{c.numero_cuota}</td>
                 {data.tipo !== 'fiado' && (
                   <td className="px-4 py-2.5 text-gray-500">{new Date(c.fecha_vencimiento).toLocaleDateString('es-CO')}</td>
@@ -504,6 +516,12 @@ export default function DetallePrestamo() {
                 <td className="px-4 py-2.5 text-right text-blue-600">{fmt(c.abono_capital)}</td>
                 <td className="px-4 py-2.5 text-right text-orange-500">{fmt(c.abono_interes)}</td>
                 <td className="px-4 py-2.5 text-right text-green-600">{fmt(c.monto_pagado)}</td>
+                <td className="px-4 py-2.5 text-right">
+                  {pend > 0
+                    ? <span className="font-bold text-red-600">{fmt(pend)}</span>
+                    : <span className="text-gray-300">—</span>
+                  }
+                </td>
                 <td className="px-4 py-2.5">
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${estadoColor[c.estado]||estadoColor.pendiente}`}>
                     {c.estado}
@@ -515,7 +533,8 @@ export default function DetallePrestamo() {
                     : <span className="text-gray-300">—</span>}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -523,8 +542,19 @@ export default function DetallePrestamo() {
       {/* Historial de pagos */}
       {pagos.length > 0 && (
         <div className="bg-white rounded-xl border overflow-hidden">
-          <div className="px-6 py-4 border-b">
+          <div className="px-6 py-4 border-b flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold text-gray-700">💳 Historial de pagos ({pagos.length})</h3>
+            {(() => {
+              const totalEnPagos  = pagos.reduce((s,p) => s + parseFloat(p.monto), 0)
+              const totalEnCuotas = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_pagado||0), 0) || 0
+              const diff = Math.abs(totalEnCuotas - totalEnPagos)
+              if (diff > 1) return (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs text-amber-700">
+                  ⚠️ Los pagos registrados ({fmt(totalEnPagos)}) no coinciden con lo marcado en cuotas ({fmt(totalEnCuotas)}). Puede haber ajustes manuales en la BD.
+                </div>
+              )
+              return null
+            })()}
           </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
