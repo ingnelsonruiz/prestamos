@@ -19,8 +19,14 @@ export default function CobrosPage() {
   const [loading, setLoading] = useState(false)
   const [recibo, setRecibo]   = useState(null)
   const [error, setError]     = useState('')
+  const [fechaDesde, setFechaDesde] = useState('')
+  const [fechaHasta, setFechaHasta] = useState('')
 
-  const hoy = new Date().toISOString().split('T')[0]
+  // Fecha local sin desfase UTC
+  const hoy = (() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  })()
 
   const cargar = async () => {
     const [pend, parc] = await Promise.all([
@@ -64,10 +70,19 @@ export default function CobrosPage() {
     if (filtro === 'mora') return g.cuotas.some(c => esMora(c))
     if (filtro === 'hoy')  return g.cuotas.some(c => c.fecha_vencimiento?.split('T')[0] === hoy)
     if (filtro === 'semana') {
-      const fin = new Date(hoy); fin.setDate(fin.getDate()+7)
+      const d = new Date(hoy.split('-')[0], hoy.split('-')[1]-1, parseInt(hoy.split('-')[2])+7)
+      const fin = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       return g.cuotas.some(c => {
         const fv = c.fecha_vencimiento?.split('T')[0]
-        return fv >= hoy && fv <= fin.toISOString().split('T')[0]
+        return fv >= hoy && fv <= fin
+      })
+    }
+    if (filtro === 'rango' && (fechaDesde || fechaHasta)) {
+      return g.cuotas.some(c => {
+        const fv = c.fecha_vencimiento?.split('T')[0]
+        if (fechaDesde && fv < fechaDesde) return false
+        if (fechaHasta && fv > fechaHasta) return false
+        return true
       })
     }
     // "todas": mostrar solo si hay búsqueda activa
@@ -174,6 +189,24 @@ export default function CobrosPage() {
               </div>
             </div>
           ))}
+
+          {/* Rango de fechas */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-gray-500 font-medium">📅 Rango:</span>
+            <input type="date" max={hoy}
+              className="border rounded-lg px-2 py-1.5 text-sm"
+              value={fechaDesde}
+              onChange={e => { setFechaDesde(e.target.value); setFiltro('rango'); const ab={}; grupos.forEach(g=>{ab[g.producto_id]=true}); setAbiertos(ab) }} />
+            <span className="text-xs text-gray-400">al</span>
+            <input type="date" max={hoy}
+              className="border rounded-lg px-2 py-1.5 text-sm"
+              value={fechaHasta}
+              onChange={e => { setFechaHasta(e.target.value); setFiltro('rango'); const ab={}; grupos.forEach(g=>{ab[g.producto_id]=true}); setAbiertos(ab) }} />
+            {(fechaDesde||fechaHasta) && (
+              <button onClick={()=>{setFechaDesde('');setFechaHasta('');setFiltro('todas');setAbiertos({})}}
+                className="text-xs text-red-400 hover:text-red-600">✕ Limpiar</button>
+            )}
+          </div>
         </div>
       </div>
 
