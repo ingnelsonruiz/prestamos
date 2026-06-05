@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
@@ -8,7 +8,16 @@ const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',
 const tipoColor  = { prestamo:'bg-blue-100 text-blue-700', venta:'bg-yellow-100 text-yellow-700', empeno:'bg-purple-100 text-purple-700', fiado:'bg-green-100 text-green-700', adelanto:'bg-teal-100 text-teal-700' }
 const estadoBadge = { activo:'bg-blue-100 text-blue-700', al_dia:'bg-green-100 text-green-700', en_mora:'bg-red-100 text-red-700', saldado:'bg-emerald-100 text-emerald-700', refinanciado:'bg-purple-100 text-purple-700' }
 
+// Wrapper requerido por Next.js 15: useSearchParams debe estar dentro de <Suspense>
 export default function PrestamosPage() {
+  return (
+    <Suspense fallback={<div className="text-gray-400 p-4">Cargando...</div>}>
+      <PrestamosContent />
+    </Suspense>
+  )
+}
+
+function PrestamosContent() {
   const searchParams = useSearchParams()
   const [productos, setProductos] = useState([])
   const [buscar, setBuscar]       = useState('')
