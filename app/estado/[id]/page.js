@@ -256,8 +256,6 @@ export default function EstadoCuenta() {
                                 <th className="text-left px-3 py-2 text-gray-400 font-semibold">#</th>
                                 <th className="text-left px-3 py-2 text-gray-400 font-semibold">Fecha vencimiento</th>
                                 <th className="text-right px-3 py-2 text-gray-400 font-semibold">Cuota</th>
-                                <th className="text-right px-3 py-2 text-gray-400 font-semibold">Capital</th>
-                                <th className="text-right px-3 py-2 text-gray-400 font-semibold">Interés</th>
                                 <th className="text-center px-3 py-2 text-gray-400 font-semibold">Estado</th>
                               </tr>
                             </thead>
@@ -268,7 +266,7 @@ export default function EstadoCuenta() {
                                 const esMora = vence < hoyStr && c.estado !== 'pagada'
                                 return (
                                   <tr key={idx}
-                                    className={`border-b last:border-0 transition-colors
+                                    className={`border-b last:border-0
                                       ${c.estado === 'pagada' ? 'bg-green-50' :
                                         esMora               ? 'bg-red-50' :
                                         c.estado === 'parcial'? 'bg-yellow-50' : ''}`}>
@@ -277,8 +275,6 @@ export default function EstadoCuenta() {
                                       {vence ? new Date(vence + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
                                     </td>
                                     <td className="px-3 py-2.5 text-right font-bold text-gray-800">{fmt(c.monto_cuota)}</td>
-                                    <td className="px-3 py-2.5 text-right text-gray-600">{fmt(c.abono_capital)}</td>
-                                    <td className="px-3 py-2.5 text-right text-orange-500">{fmt(c.abono_interes)}</td>
                                     <td className="px-3 py-2.5 text-center">
                                       {c.estado === 'pagada'  && <span className="inline-block px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">✓ Pagada</span>}
                                       {c.estado === 'parcial' && <span className="inline-block px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-semibold">Parcial</span>}
