@@ -91,10 +91,14 @@ export default function Sidebar({ onClose }) {
           className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm text-red-300 hover:bg-red-900/30 hover:text-red-200 transition-colors">
           🚪 Cerrar sesión
         </button>
-        <p className="text-center text-blue-500 text-xs mt-2 leading-tight px-2">
-          Desarrollado por<br/>
-          <span className="text-blue-300 font-medium">Ing. Nelson Javier Ruiz Lozano</span>
-        </p>
+        <div className="mt-2 px-2 text-center">
+          <p className="text-blue-500 text-xs leading-snug">Desarrollado por</p>
+          <p className="text-blue-300 text-xs font-semibold leading-snug">Ing. Nelson Javier Ruiz Lozano</p>
+          <div className="mt-1 inline-flex items-center gap-1.5 bg-blue-900/50 border border-blue-700/40 rounded-md px-2 py-0.5">
+            <span className="text-yellow-400 text-xs font-black">⚡ DataDevs</span>
+            <span className="text-blue-400 text-xs">Systems</span>
+          </div>
+        </div>
       </div>
     </aside>
   )

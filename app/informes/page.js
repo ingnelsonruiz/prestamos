@@ -40,7 +40,7 @@ export default function InformesPage() {
 
     // Hoja 1: Resumen ejecutivo
     const resumenData = [
-      ['INFORME DE INTERESES COBRADOS — INVERSIONES TATA LIÑAN'],
+      ['INFORME DE INTERESES COBRADOS — INVERSIONES HNOS LIÑÁN'],
       [`Período: ${desde} al ${hasta}`],
       [''],
       ['RESUMEN EJECUTIVO'],
