@@ -304,9 +304,16 @@ export default function DetallePrestamo() {
       <div className="bg-white rounded-xl border p-6">
         <div className="flex justify-between items-start flex-wrap gap-4">
           <div>
-            <span className="text-xs uppercase font-bold text-primary-600 bg-primary-50 px-2 py-1 rounded">
-              {data.tipo}
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs uppercase font-bold text-primary-600 bg-primary-50 px-2 py-1 rounded">
+                {data.tipo}
+              </span>
+              {data.referencia && (
+                <span className="text-xs font-bold font-mono bg-gray-100 text-gray-600 px-2 py-1 rounded border border-gray-200">
+                  {data.referencia}
+                </span>
+              )}
+            </div>
             <h2 className="text-xl font-bold mt-2">{data.nombre_cliente}</h2>
             <p className="text-gray-500 text-sm">{data.documento}</p>
           </div>
@@ -571,6 +578,35 @@ export default function DetallePrestamo() {
               )
             })}
           </tbody>
+          {/* ── TOTALES ── */}
+          <tfoot className="border-t-2 border-gray-300 bg-gray-50 font-bold text-sm">
+            <tr>
+              <td className="px-4 py-3 text-gray-600 uppercase text-xs tracking-wide"
+                colSpan={data.tipo !== 'fiado' ? 2 : 1}>
+                TOTALES ({data.cuotas?.length || 0} cuotas)
+              </td>
+              <td className="px-4 py-3 text-right text-gray-800">
+                {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_cuota||0), 0) || 0)}
+              </td>
+              <td className="px-4 py-3 text-right text-blue-700">
+                {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0)}
+              </td>
+              <td className="px-4 py-3 text-right text-orange-600">
+                {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0) || 0)}
+              </td>
+              <td className="px-4 py-3 text-right text-green-700">
+                {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_pagado||0), 0) || 0)}
+              </td>
+              <td className="px-4 py-3 text-right text-red-600">
+                {fmt(data.cuotas?.reduce((s,c) => s + Math.max(0, parseFloat(c.monto_cuota||0) - parseFloat(c.monto_pagado||0)), 0) || 0)}
+              </td>
+              <td colSpan={2} className="px-4 py-3 text-xs text-gray-400 text-right">
+                {data.cuotas?.filter(c=>c.estado==='pagada').length || 0} pagadas ·{' '}
+                {data.cuotas?.filter(c=>c.estado==='parcial').length || 0} parciales ·{' '}
+                {data.cuotas?.filter(c=>c.estado==='pendiente').length || 0} pendientes
+              </td>
+            </tr>
+          </tfoot>
         </table>
       </div>
 
@@ -578,17 +614,38 @@ export default function DetallePrestamo() {
       {pagos.length > 0 && (
         <div className="bg-white rounded-xl border overflow-hidden">
           <div className="px-6 py-4 border-b flex justify-between items-center flex-wrap gap-2">
-            <h3 className="font-semibold text-gray-700">💳 Historial de pagos ({pagos.length})</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="font-semibold text-gray-700">💳 Historial de pagos ({pagos.length})</h3>
+              {data.referencia && (
+                <span className="text-xs font-bold font-mono bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg border border-indigo-200">
+                  {data.referencia}
+                </span>
+              )}
+            </div>
             {(() => {
               const totalEnPagos  = pagos.reduce((s,p) => s + parseFloat(p.monto), 0)
               const totalEnCuotas = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_pagado||0), 0) || 0
               const diff = Math.abs(totalEnCuotas - totalEnPagos)
-              if (diff > 1) return (
+              if (diff <= 1) return null
+
+              // Detectar si hay liquidación anticipada con descuento
+              const pagoLiquidacion = pagos.find(p => p.notas?.includes('LIQUIDACIÓN ANTICIPADA'))
+              if (pagoLiquidacion) {
+                const descuentoTexto = pagoLiquidacion.notas?.match(/Descuento aplicado:\s*([\d.,]+)/)?.[1]
+                return (
+                  <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-1.5 text-xs text-green-700">
+                    💡 Diferencia de {fmt(diff)} por <strong>liquidación anticipada con descuento</strong>.
+                    {descuentoTexto && <span> Intereses perdonados: <strong>${descuentoTexto}</strong>.</span>}
+                    {' '}Las cuotas restantes se cerraron automáticamente.
+                  </div>
+                )
+              }
+
+              return (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs text-amber-700">
-                  ⚠️ Los pagos registrados ({fmt(totalEnPagos)}) no coinciden con lo marcado en cuotas ({fmt(totalEnCuotas)}). Puede haber ajustes manuales en la BD.
+                  ⚠️ Los pagos registrados ({fmt(totalEnPagos)}) difieren de lo marcado en cuotas ({fmt(totalEnCuotas)}). Puede haber ajustes manuales en la BD.
                 </div>
               )
-              return null
             })()}
           </div>
           <table className="w-full text-sm">

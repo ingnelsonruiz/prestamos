@@ -18,8 +18,8 @@ export async function GET(request) {
           COUNT(DISTINCT p.id)                              AS num_pagos,
           COUNT(DISTINCT p.cliente_id)                      AS num_clientes,
           SUM(p.monto)                                      AS total_recaudado,
-          SUM(cu.abono_interes * (p.monto / cu.monto_cuota)) AS intereses_estimados,
-          SUM(p.monto) - SUM(cu.abono_interes * (p.monto / cu.monto_cuota)) AS capital_recuperado
+          SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS intereses_estimados,
+          SUM(p.monto) - SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS capital_recuperado
         FROM ${S}.cred_pagos p
         JOIN ${S}.cred_cuotas cu ON cu.id = p.cuota_id
         WHERE p.fecha_pago::date BETWEEN $1 AND $2
@@ -37,8 +37,8 @@ export async function GET(request) {
           pr.descripcion_bien,
           cu.numero_cuota,
           p.monto                               AS total_pago,
-          cu.abono_interes * (p.monto / cu.monto_cuota) AS interes_cobrado,
-          p.monto - cu.abono_interes * (p.monto / cu.monto_cuota) AS capital_cobrado,
+          LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) AS interes_cobrado,
+          p.monto - LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) AS capital_cobrado,
           p.metodo_pago,
           p.usuario_nombre                      AS registrado_por,
           p.notas
@@ -55,8 +55,8 @@ export async function GET(request) {
           COUNT(DISTINCT p.id)                              AS num_pagos,
           COUNT(DISTINCT p.cliente_id)                      AS num_clientes,
           SUM(p.monto)                                      AS total_recaudado,
-          SUM(cu.abono_interes * (p.monto / cu.monto_cuota)) AS total_intereses,
-          SUM(p.monto) - SUM(cu.abono_interes * (p.monto / cu.monto_cuota)) AS total_capital
+          SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS total_intereses,
+          SUM(p.monto) - SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS total_capital
         FROM ${S}.cred_pagos p
         JOIN ${S}.cred_cuotas cu ON cu.id = p.cuota_id
         WHERE p.fecha_pago::date BETWEEN $1 AND $2

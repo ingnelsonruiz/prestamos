@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
@@ -8,9 +9,12 @@ const tipoColor  = { prestamo:'bg-blue-100 text-blue-700', venta:'bg-yellow-100 
 const estadoBadge = { activo:'bg-blue-100 text-blue-700', al_dia:'bg-green-100 text-green-700', en_mora:'bg-red-100 text-red-700', saldado:'bg-emerald-100 text-emerald-700', refinanciado:'bg-purple-100 text-purple-700' }
 
 export default function PrestamosPage() {
+  const searchParams = useSearchParams()
   const [productos, setProductos] = useState([])
   const [buscar, setBuscar]       = useState('')
-  const [filtroEstado, setFiltroEstado] = useState('activos')
+  const valoresFiltro = ['activos','todos','saldado','en_mora','refinanciado']
+  const filtroInicial = valoresFiltro.includes(searchParams.get('filtro')) ? searchParams.get('filtro') : 'activos'
+  const [filtroEstado, setFiltroEstado] = useState(filtroInicial)
 
   useEffect(() => {
     fetch('/api/productos').then(r=>r.json()).then(setProductos)
@@ -115,6 +119,11 @@ export default function PrestamosPage() {
                           <span className={`text-sm px-2.5 py-0.5 rounded-full font-semibold ${tipoColor[p.tipo]||'bg-gray-100 text-gray-600'}`}>
                             {p.tipo}
                           </span>
+                          {p.referencia && (
+                            <span className="text-sm font-black font-mono bg-indigo-600 text-white px-3 py-1 rounded-lg shadow-sm">
+                              {p.referencia}
+                            </span>
+                          )}
                           {p.descripcion_bien && (
                             <span className="text-sm font-semibold" style={{color:'#111'}}>{p.descripcion_bien.slice(0,50)}{p.descripcion_bien.length>50?'...':''}</span>
                           )}

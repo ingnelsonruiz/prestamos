@@ -17,10 +17,20 @@ export async function POST(request) {
     )
     if (!cuotaRes.rows.length) return NextResponse.json({ error: 'Cuota no encontrada' }, { status: 404 })
 
-    const cuota      = cuotaRes.rows[0]
+    const cuota           = cuotaRes.rows[0]
+    const pendienteEnCuota = parseFloat(cuota.monto_cuota) - parseFloat(cuota.monto_pagado)
+
+    // Validar que el monto no exceda el saldo pendiente de la cuota
+    if (parseFloat(monto) > pendienteEnCuota + 1) {
+      const fmtCOP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v)
+      return NextResponse.json({
+        error: `El monto ingresado (${fmtCOP(monto)}) supera el saldo pendiente de la cuota (${fmtCOP(pendienteEnCuota)}). Para pagar varias cuotas a la vez registre cada una por separado.`
+      }, { status: 400 })
+    }
+
     const nuevoPagado = parseFloat(cuota.monto_pagado) + parseFloat(monto)
-    const pagado      = Math.min(nuevoPagado, cuota.monto_cuota)
-    const estadoCuota = pagado >= cuota.monto_cuota ? 'pagada' : 'parcial'
+    const pagado      = Math.min(nuevoPagado, parseFloat(cuota.monto_cuota))
+    const estadoCuota = pagado >= parseFloat(cuota.monto_cuota) ? 'pagada' : 'parcial'
 
     const confRes = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='recibo_consecutivo'`)
     const consecutivo = parseInt(confRes.rows[0]?.valor || '1')

@@ -52,6 +52,7 @@ export default function CobrosPage() {
           descripcion:    c.descripcion_bien || c.descripcion || '',
           fecha_prestamo: c.fecha_prestamo,
           capital:        c.capital_producto,
+          referencia:     c.referencia_producto,
           cuotas: []
         }
       }
@@ -328,11 +329,16 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                     {/* Nombre */}
                     <p className="text-lg font-bold text-gray-900 leading-tight">{g.nombre_cliente}</p>
                     {/* Fila de datos clave */}
-                    <div className="flex items-center gap-4 mt-1.5 flex-wrap">
+                    <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                       <span className="text-base font-bold text-gray-800">
                         {tipoLabel[g.tipo] || g.tipo}
                         {g.descripcion && <span className="ml-1.5 text-gray-600"> — {g.descripcion.slice(0,45)}{g.descripcion.length > 45 ? '…' : ''}</span>}
                       </span>
+                      {g.referencia && (
+                        <span className="text-xs font-bold font-mono bg-gray-100 text-gray-500 px-2 py-0.5 rounded border">
+                          {g.referencia}
+                        </span>
+                      )}
                     </div>
                     {/* Fila secundaria */}
                     <div className="flex items-center gap-4 mt-1.5 flex-wrap">

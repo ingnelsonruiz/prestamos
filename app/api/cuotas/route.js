@@ -19,6 +19,7 @@ export async function GET(request) {
              p.descripcion_bien,
              p.fecha_creacion AS fecha_prestamo,
              p.monto_capital  AS capital_producto,
+             p.referencia     AS referencia_producto,
              GREATEST(0, CURRENT_DATE - cu.fecha_vencimiento) AS dias_mora
       FROM ${S}.cred_cuotas cu
       JOIN ${S}.cred_clientes  c ON c.id = cu.cliente_id

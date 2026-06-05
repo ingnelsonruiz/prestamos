@@ -148,6 +148,7 @@ export default function EstadoCuenta() {
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-bold text-gray-800">{tipoLabel[p.tipo] || p.tipo}</p>
+                      {p.referencia && <span className="text-xs font-bold font-mono bg-gray-100 text-gray-500 px-2 py-0.5 rounded border">{p.referencia}</span>}
                       {p.estado === 'saldado' && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold">✅ Saldado</span>}
                       {p.estado === 'refinanciado' && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-semibold">🔄 Refinanciado</span>}
                     </div>

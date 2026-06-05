@@ -26,10 +26,18 @@ export async function GET(request, { params }) {
       `SELECT * FROM ${S}.cred_cuotas WHERE producto_id=$1 ORDER BY numero_cuota`, [id]
     )
     const hoy = new Date()
+    const hoyLocal = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())
     const cuotasConMora = cuotas.rows.map(c => {
-      const vence = new Date(c.fecha_vencimiento)
-      const dias  = c.estado !== 'pagada' && hoy > vence
-        ? Math.floor((hoy - vence) / (1000*60*60*24)) : 0
+      // Extraer fecha en UTC (pg DATE = UTC midnight) y construir en local para evitar desfase
+      const fv = c.fecha_vencimiento
+      const venceStr = typeof fv === 'string' ? fv.split('T')[0] : (() => {
+        const d = new Date(fv)
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`
+      })()
+      const [y, m, d] = venceStr.split('-').map(Number)
+      const venceLocal = new Date(y, m - 1, d)
+      const dias = c.estado !== 'pagada' && hoyLocal > venceLocal
+        ? Math.floor((hoyLocal - venceLocal) / (1000*60*60*24)) : 0
       return { ...c, dias_mora: dias }
     })
 

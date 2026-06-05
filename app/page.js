@@ -1,17 +1,102 @@
 'use client'
 import { useEffect, useState } from 'react'
-import KPICard from '@/components/KPICard'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 
-const fmt = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v)
+const fmt = v =>
+  new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v ?? 0)
 
+const fmtK = v => {
+  if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`
+  if (Math.abs(v) >= 1_000)     return `$${(v / 1_000).toFixed(0)}K`
+  return fmt(v)
+}
+
+/* ─── Tarjeta hero con 1 cifra grande ─────────────────────────────────────── */
+function HeroCard({ titulo, valor, sub, bg, textColor = 'text-white', subColor }) {
+  return (
+    <div className={`${bg} rounded-2xl p-5 shadow-lg`}>
+      <p className={`text-xs uppercase tracking-wide font-semibold opacity-80 ${textColor}`}>{titulo}</p>
+      <p className={`text-3xl font-black mt-1 ${textColor}`}>{valor}</p>
+      {sub && <p className={`text-xs mt-1 ${subColor ?? 'opacity-60 ' + textColor}`}>{sub}</p>}
+    </div>
+  )
+}
+
+/* ─── Tarjeta con desglose hoy / semana / mes / total ─────────────────────── */
+function KPIDesglose({ titulo, icono, color, hoy, semana, mes, total, extra }) {
+  const colors = {
+    green:  { bg: 'bg-emerald-50',  border: 'border-emerald-200', title: 'text-emerald-700', total: 'text-emerald-700' },
+    red:    { bg: 'bg-red-50',      border: 'border-red-200',     title: 'text-red-700',     total: 'text-red-700'     },
+    blue:   { bg: 'bg-blue-50',     border: 'border-blue-200',    title: 'text-blue-700',    total: 'text-blue-700'    },
+    amber:  { bg: 'bg-amber-50',    border: 'border-amber-200',   title: 'text-amber-700',   total: 'text-amber-700'   },
+  }
+  const c = colors[color] ?? colors.blue
+
+  return (
+    <div className={`${c.bg} border ${c.border} rounded-2xl p-5`}>
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xl">{icono}</span>
+        <p className={`text-xs uppercase tracking-wide font-bold ${c.title}`}>{titulo}</p>
+      </div>
+
+      {/* Total grande */}
+      <p className={`text-2xl font-black ${c.total} mb-3`}>{total}</p>
+
+      {/* Desglose */}
+      <div className="space-y-1.5 border-t border-current border-opacity-20 pt-3">
+        {hoy    != null && <Row label="Hoy"         val={hoy}    />}
+        {semana != null && <Row label="Esta semana" val={semana} />}
+        {mes    != null && <Row label="Este mes"    val={mes}    />}
+        {extra && extra.map((e, i) => <Row key={i} label={e.label} val={e.val} highlight={e.highlight} />)}
+      </div>
+    </div>
+  )
+}
+
+function Row({ label, val, highlight }) {
+  return (
+    <div className="flex justify-between items-center text-xs">
+      <span className="text-gray-500">{label}</span>
+      <span className={`font-semibold ${highlight ? 'text-red-600' : 'text-gray-700'}`}>{val}</span>
+    </div>
+  )
+}
+
+/* ─── Tarjeta estado cartera ──────────────────────────────────────────────── */
+function EstadoCard({ label, icono, capital, count, bg, border, text, filtro }) {
+  const router = useRouter()
+  return (
+    <div
+      className={`${bg} border ${border} rounded-xl p-4 cursor-pointer select-none
+        transition-transform hover:scale-[1.02] active:scale-[0.98]`}
+      onDoubleClick={() => router.push(`/prestamos?filtro=${filtro}`)}
+      title="Doble clic para ver estos créditos"
+    >
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-lg">{icono}</span>
+        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${bg} ${border} border ${text}`}>
+          {count} crédito{count !== 1 ? 's' : ''}
+        </span>
+      </div>
+      <p className={`text-[11px] uppercase tracking-wide font-semibold ${text} opacity-70`}>{label}</p>
+      <p className={`text-lg font-black ${text} mt-0.5`}>{fmt(capital)}</p>
+      <p className={`text-[10px] mt-1.5 ${text} opacity-40`}>↗ doble clic para ver</p>
+    </div>
+  )
+}
+
+/* ─── Componente principal ────────────────────────────────────────────────── */
 export default function Dashboard() {
-  const [data, setData]   = useState(null)
-  const [error, setError] = useState(null)
+  const router = useRouter()
+  const [data,     setData]     = useState(null)
+  const [error,    setError]    = useState(null)
   const [fechaHoy, setFechaHoy] = useState('')
 
   useEffect(() => {
-    setFechaHoy(new Date().toLocaleDateString('es-CO', { weekday:'long', year:'numeric', month:'long', day:'numeric' }))
+    setFechaHoy(
+      new Date().toLocaleDateString('es-CO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    )
   }, [])
 
   useEffect(() => {
@@ -21,79 +106,180 @@ export default function Dashboard() {
       .catch(e => setError(e.message))
   }, [])
 
-  if (error) return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error: {error}</div>
-  if (!data)  return <div className="text-gray-400 p-4">Cargando dashboard...</div>
-  if (data.error) return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error BD: {data.error}</div>
-  if (!data.kpis) return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Respuesta inesperada de la API</div>
+  if (error)       return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error: {error}</div>
+  if (!data)       return <div className="text-gray-400 p-6 text-center">Cargando dashboard…</div>
+  if (data.error)  return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error BD: {data.error}</div>
 
-  const { kpis, cuotas_hoy, cuotas_semana, empenos_vencer } = data
+  const { cartera, intereses, mora, recaudo, cartera_vencida, capital, cuotas_hoy, cuotas_semana, empenos_vencer } = data
+
+  const roi = recaudo.total > 0
+    ? ((intereses.total / (recaudo.total - intereses.total)) * 100).toFixed(1)
+    : 0
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
-        <p className="text-sm text-gray-500 mt-1">{fechaHoy}</p>
+    <div className="space-y-6">
+      {/* Encabezado */}
+      <div className="flex items-end justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
+          <p className="text-sm text-gray-500 mt-0.5 capitalize">{fechaHoy}</p>
+        </div>
+        <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+          ROI histórico: <strong>{roi}%</strong>
+        </span>
       </div>
 
-      {/* KPIs fila 1 — inversión histórica */}
+      {/* ═══ FILA 1 — Tres cifras clave para el dueño ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="bg-gradient-to-br from-[#1e3a5f] to-[#1a4a7a] rounded-2xl p-5 text-white shadow-lg">
-          <p className="text-blue-300 text-xs uppercase tracking-wide font-semibold">💼 Total invertido en préstamos</p>
-          <p className="text-3xl font-black mt-2">{fmt(kpis.total_invertido)}</p>
-          <p className="text-blue-300 text-xs mt-1">{kpis.num_creditos} crédito(s) históricos</p>
-        </div>
-        <div className="bg-gradient-to-br from-emerald-600 to-emerald-500 rounded-2xl p-5 text-white shadow-lg">
-          <p className="text-emerald-100 text-xs uppercase tracking-wide font-semibold">💰 Total recuperado</p>
-          <p className="text-3xl font-black mt-2">{fmt(kpis.total_recuperado)}</p>
-          <p className="text-emerald-100 text-xs mt-1">
-            {kpis.total_invertido > 0 ? Math.round((kpis.total_recuperado / kpis.total_invertido) * 100) : 0}% del capital invertido
-          </p>
-        </div>
-        <div className="bg-white rounded-2xl border-2 border-blue-100 p-5 shadow-sm">
-          <p className="text-gray-400 text-xs uppercase tracking-wide font-semibold">📊 Capital en la calle</p>
-          <p className="text-3xl font-black mt-2 text-blue-700">{fmt(kpis.capital_en_calle)}</p>
-          <p className="text-gray-400 text-xs mt-1">Saldo pendiente activo</p>
+        <HeroCard
+          titulo="💰 Capital en la calle"
+          valor={fmt(capital.en_calle)}
+          sub="Saldo pendiente de créditos activos"
+          bg="bg-gradient-to-br from-[#1e3a5f] to-[#1a4a7a]"
+        />
+        <HeroCard
+          titulo="📈 Intereses proyectados"
+          valor={fmt(capital.intereses_proyectados)}
+          sub="Por cobrar en cuotas pendientes"
+          bg="bg-gradient-to-br from-emerald-600 to-emerald-500"
+        />
+        <HeroCard
+          titulo="🏦 Saldo de caja"
+          valor={fmt(capital.saldo_caja)}
+          sub="Efectivo acumulado registrado"
+          bg={capital.saldo_caja >= 0
+            ? 'bg-gradient-to-br from-violet-600 to-violet-500'
+            : 'bg-gradient-to-br from-red-600 to-red-500'}
+        />
+      </div>
+
+      {/* ═══ FILA 2 — Estado de cartera por tipo ═══ */}
+      <div>
+        <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">Estado de la cartera</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <EstadoCard
+            label="Créditos activos"   icono="✅"
+            capital={cartera.capital_activo}      count={cartera.num_activos}
+            bg="bg-blue-50"  border="border-blue-200"  text="text-blue-700"
+            filtro="activos"
+          />
+          <EstadoCard
+            label="Créditos saldados"  icono="🏁"
+            capital={cartera.capital_saldado}     count={cartera.num_saldados}
+            bg="bg-green-50" border="border-green-200" text="text-green-700"
+            filtro="saldado"
+          />
+          <EstadoCard
+            label="Créditos en mora"   icono="⚠️"
+            capital={cartera.capital_mora}        count={cartera.num_mora}
+            bg="bg-red-50"   border="border-red-200"   text="text-red-700"
+            filtro="en_mora"
+          />
+          <EstadoCard
+            label="Refinanciados"      icono="🔄"
+            capital={cartera.capital_refinanciado} count={cartera.num_refinanciados}
+            bg="bg-purple-50" border="border-purple-200" text="text-purple-700"
+            filtro="refinanciado"
+          />
         </div>
       </div>
 
-      {/* KPIs fila 2 — operación diaria */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPICard titulo="Intereses ganados"    valor={fmt(kpis.intereses_ganados)}   icono="📈" color="green" />
-        <KPICard titulo="Clientes en mora"     valor={kpis.clientes_en_mora}         icono="⚠️" alerta={kpis.clientes_en_mora > 0} />
-        <KPICard titulo="Recaudo del día"      valor={fmt(kpis.recaudo_hoy)}         icono="💳" color="green" />
-        <KPICard titulo="Cartera vencida +30d" valor={fmt(kpis.cartera_vencida_30d)} icono="🔴" alerta={kpis.cartera_vencida_30d > 0} />
+      {/* ═══ FILA 3 — KPIs con desglose temporal ═══ */}
+      <div>
+        <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">Métricas operativas</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+
+          {/* Intereses ganados */}
+          <KPIDesglose
+            titulo="Intereses cobrados"
+            icono="📊"
+            color="green"
+            hoy={fmt(intereses.hoy)}
+            semana={fmt(intereses.semana)}
+            mes={fmt(intereses.mes)}
+            total={fmt(intereses.total)}
+          />
+
+          {/* Mora */}
+          <KPIDesglose
+            titulo="Cartera en mora"
+            icono="🔴"
+            color="red"
+            total={fmt(mora.monto_total)}
+            extra={[
+              { label: `0–30 días (${mora.clientes_total} clientes)`, val: fmt(mora.monto_0_30d) },
+              { label: '31–60 días',                                  val: fmt(mora.monto_31_60d), highlight: mora.monto_31_60d > 0 },
+              { label: 'Más de 60 días',                              val: fmt(mora.monto_mas60d), highlight: mora.monto_mas60d > 0 },
+              { label: `Clientes críticos (>30d)`,                    val: `${mora.clientes_30d} cliente${mora.clientes_30d !== 1 ? 's' : ''}`, highlight: mora.clientes_30d > 0 },
+            ]}
+          />
+
+          {/* Recaudo */}
+          <KPIDesglose
+            titulo="Recaudo"
+            icono="💳"
+            color="blue"
+            hoy={fmt(recaudo.hoy)}
+            semana={fmt(recaudo.semana)}
+            mes={fmt(recaudo.mes)}
+            total={fmt(recaudo.total)}
+          />
+
+          {/* Cartera vencida */}
+          <KPIDesglose
+            titulo="Cartera vencida"
+            icono="📋"
+            color="amber"
+            total={fmt(cartera_vencida.total)}
+            extra={[
+              { label: 'Venció hoy',       val: fmt(cartera_vencida.vencio_hoy),    highlight: cartera_vencida.vencio_hoy > 0 },
+              { label: 'Esta semana',      val: fmt(cartera_vencida.vencio_semana), highlight: cartera_vencida.vencio_semana > 0 },
+              { label: 'Este mes',         val: fmt(cartera_vencida.vencio_mes) },
+              { label: 'Más de 30 días',   val: fmt(cartera_vencida.mas_30d),       highlight: cartera_vencida.mas_30d > 0 },
+            ]}
+          />
+        </div>
       </div>
 
+      {/* ═══ FILA 4 — Agenda del día / semana / empeños ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
         {/* Cuotas vencen hoy */}
         <div className="bg-white rounded-xl border p-5">
           <h3 className="font-semibold text-gray-700 mb-3">⏰ Vencen hoy ({cuotas_hoy.length})</h3>
           {cuotas_hoy.length === 0
             ? <p className="text-sm text-gray-400">Sin cuotas para hoy</p>
-            : <ul className="space-y-2">
+            : (
+              <ul className="space-y-2">
                 {cuotas_hoy.map(c => (
                   <li key={c.id} className="flex justify-between text-sm">
-                    <span className="font-medium">{c.nombre_cliente}</span>
-                    <span className="text-blue-600 font-semibold">{fmt(c.monto_cuota)}</span>
+                    <span className="font-medium truncate pr-2">{c.nombre_cliente}</span>
+                    <span className="text-blue-600 font-semibold whitespace-nowrap">{fmt(c.monto_cuota)}</span>
                   </li>
                 ))}
               </ul>
+            )
           }
         </div>
 
         {/* Cuotas semana */}
         <div className="bg-white rounded-xl border p-5">
-          <h3 className="font-semibold text-gray-700 mb-3">📅 Esta semana ({cuotas_semana.length})</h3>
+          <h3 className="font-semibold text-gray-700 mb-3">📅 Próximos 7 días ({cuotas_semana.length})</h3>
           {cuotas_semana.length === 0
             ? <p className="text-sm text-gray-400">Sin cuotas esta semana</p>
-            : <ul className="space-y-2">
-                {cuotas_semana.slice(0,8).map(c => (
+            : (
+              <ul className="space-y-2">
+                {cuotas_semana.slice(0, 8).map(c => (
                   <li key={c.id} className="flex justify-between text-sm">
-                    <span>{c.nombre_cliente}</span>
-                    <span className="text-gray-500">{new Date(c.fecha_vencimiento).toLocaleDateString('es-CO')}</span>
+                    <span className="truncate pr-2">{c.nombre_cliente}</span>
+                    <span className="text-gray-500 whitespace-nowrap text-xs">
+                      {new Date(c.fecha_vencimiento + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                      {' · '}{fmt(c.monto_cuota)}
+                    </span>
                   </li>
                 ))}
               </ul>
+            )
           }
         </div>
 
@@ -102,33 +288,46 @@ export default function Dashboard() {
           <h3 className="font-semibold text-gray-700 mb-3">🔒 Empeños por vencer ({empenos_vencer.length})</h3>
           {empenos_vencer.length === 0
             ? <p className="text-sm text-gray-400">Sin empeños próximos</p>
-            : <ul className="space-y-2">
+            : (
+              <ul className="space-y-2">
                 {empenos_vencer.map(e => {
-                  const dias = Math.ceil((new Date(e.fecha_limite_rescate) - new Date()) / (1000*60*60*24))
+                  const dias = Math.ceil(
+                    (new Date(e.fecha_limite_rescate + 'T12:00:00') - new Date()) / (1000 * 60 * 60 * 24)
+                  )
                   return (
                     <li key={e.id} className="flex justify-between text-sm">
-                      <span>{e.nombre_cliente}</span>
-                      <span className={`font-semibold ${dias <= 3 ? 'text-red-600' : dias <= 7 ? 'text-orange-500' : 'text-yellow-600'}`}>
-                        {dias}d
+                      <span className="truncate pr-2">{e.nombre_cliente}</span>
+                      <span className={`font-semibold whitespace-nowrap ${
+                        dias <= 3 ? 'text-red-600' : dias <= 7 ? 'text-orange-500' : 'text-yellow-600'
+                      }`}>
+                        {dias <= 0 ? '¡VENCIDO!' : `${dias}d`}
                       </span>
                     </li>
                   )
                 })}
               </ul>
+            )
           }
         </div>
       </div>
 
       {/* Accesos rápidos */}
-      <div className="flex gap-3">
-        <Link href="/prestamos/nuevo" className="bg-primary-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors">
+      <div className="flex flex-wrap gap-3 pt-2">
+        <Link href="/prestamos/nuevo"
+          className="bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
           + Nuevo préstamo
         </Link>
-        <Link href="/clientes" className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+        <Link href="/clientes"
+          className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
           Ver clientes
         </Link>
-        <Link href="/cobros" className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+        <Link href="/cobros"
+          className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
           Registrar cobro
+        </Link>
+        <Link href="/informes"
+          className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+          Ver informes
         </Link>
       </div>
     </div>

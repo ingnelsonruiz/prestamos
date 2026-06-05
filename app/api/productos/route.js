@@ -46,19 +46,27 @@ export async function POST(request) {
     if (!cliente_id || !tipo || !monto_capital)
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 })
 
+    // Generar referencia CRED-XXXXXX
+    const confRef = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='credito_consecutivo'`)
+    const numRef  = parseInt(confRef.rows[0]?.valor || '1')
+    const referencia = `CRED-${String(numRef).padStart(6, '0')}`
+    await query(
+      `UPDATE ${S}.cred_configuracion SET valor=$1 WHERE clave='credito_consecutivo'`,
+      [String(numRef + 1)]
+    )
+
     // Fiado y Adelanto: cuenta abierta sin cuotas ni interés
     if (tipo === 'fiado' || tipo === 'adelanto') {
       const id = uuidv4()
       const prod = await query(
         `INSERT INTO ${S}.cred_productos
-          (id,cliente_id,tipo,monto_capital,tasa_interes,num_cuotas,
+          (id,referencia,cliente_id,tipo,monto_capital,tasa_interes,num_cuotas,
            fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas)
-         VALUES ($1,$2,$3,$4,0,1,$5,false,'plano',$6,$7) RETURNING *`,
-        [id, cliente_id, tipo, parseFloat(monto_capital),
+         VALUES ($1,$2,$3,$4,$5,0,1,$6,false,'plano',$7,$8) RETURNING *`,
+        [id, referencia, cliente_id, tipo, parseFloat(monto_capital),
          fecha_primer_pago || new Date().toISOString().split('T')[0],
          descripcion_bien||null, notas||null]
       )
-      // Una sola cuota = saldo total, sin fecha fija (año 2099)
       const cuotaId = uuidv4()
       await query(
         `INSERT INTO ${S}.cred_cuotas
@@ -75,12 +83,12 @@ export async function POST(request) {
 
     const prod = await query(
       `INSERT INTO ${S}.cred_productos (
-        id,cliente_id,tipo,monto_capital,tasa_interes,periodo_tasa,
+        id,referencia,cliente_id,tipo,monto_capital,tasa_interes,periodo_tasa,
         frecuencia_cobro,num_cuotas,fecha_primer_pago,con_interes,
         metodo_calculo,cuota_inicial,descripcion_bien,
         valor_comercial_bien,fecha_limite_rescate,notas,es_refinanciacion_de
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
-      [id, cliente_id, tipo, capitalFinanciar,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+      [id, referencia, cliente_id, tipo, capitalFinanciar,
        tasa_interes||0, periodo_tasa||'mensual',
        frecuencia_cobro||'mensual', num_cuotas, fecha_primer_pago,
        con_interes !== false, metodo_calculo||'plano',

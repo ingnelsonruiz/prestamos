@@ -37,11 +37,20 @@ export async function POST(request, { params }) {
     if (!cuotasPendientes.length)
       return NextResponse.json({ error: 'No hay cuotas pendientes — el crédito ya está saldado' }, { status: 400 })
 
-    // Calcular saldo real pendiente y saldo solo de capital
-    const saldoReal            = cuotasPendientes.reduce((s, c) =>
+    // Calcular saldo real pendiente
+    const saldoReal = cuotasPendientes.reduce((s, c) =>
       s + parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0), 0)
-    const saldoCapitalPendiente = cuotasPendientes.reduce((s, c) =>
-      s + parseFloat(c.abono_capital || 0), 0)
+
+    // Saldo solo capital — proporcional para cuotas parciales
+    // (misma lógica que el frontend para evitar discrepancias)
+    const saldoCapitalPendiente = cuotasPendientes.reduce((s, c) => {
+      const montoCuota   = parseFloat(c.monto_cuota || 0)
+      const montoPagado  = parseFloat(c.monto_pagado || 0)
+      const abonoCapital = parseFloat(c.abono_capital || 0)
+      if (montoCuota <= 0) return s
+      const proporcionPendiente = Math.max(0, (montoCuota - montoPagado) / montoCuota)
+      return s + (abonoCapital * proporcionPendiente)
+    }, 0)
 
     const montoAcordado = parseFloat(monto_acordado)
 
