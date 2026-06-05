@@ -292,70 +292,123 @@ export default function PerfilCliente() {
         {/* Cards de productos */}
         <div className="space-y-3">
           {prodsFiltrados.map(p => {
-            const pendiente = parseFloat(p.saldo_total || 0)
-            const totalCu   = parseInt(p.total_cuotas || 0)
-            const pagadas   = parseInt(p.cuotas_pagadas || 0)
-            const progreso  = totalCu > 0 ? Math.round((pagadas / totalCu) * 100) : 0
-            const enMora    = parseInt(p.cuotas_mora || 0) > 0
+            const pendiente    = parseFloat(p.saldo_total || 0)
+            const totalCu      = parseInt(p.total_cuotas || 0)
+            const pagadas      = parseInt(p.cuotas_pagadas || 0)
+            const progreso     = totalCu > 0 ? Math.round((pagadas / totalCu) * 100) : 0
+            const enMora       = parseInt(p.cuotas_mora || 0) > 0
+            const esSaldado    = p.estado === 'saldado'
+            const esRefinanciado = p.estado === 'refinanciado'
+
+            const accentColor  = enMora ? '#dc2626' : esSaldado ? '#059669' : esRefinanciado ? '#7c3aed' : '#1e3a5f'
+            const pendienteColor = enMora ? '#dc2626' : esSaldado ? '#059669' : '#1e3a5f'
 
             return (
               <Link key={p.id} href={`/prestamos/${p.id}`}
-                className={`block bg-white rounded-2xl border-2 p-5 hover:shadow-lg transition-all group
-                  ${enMora ? 'border-red-200 hover:border-red-300' : 'border-gray-100 hover:border-blue-200'}`}>
-                <div className="flex items-start justify-between gap-4">
-                  {/* Icono + info */}
-                  <div className="flex items-start gap-3">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-2xl flex-shrink-0
-                      ${enMora ? 'bg-red-50' : 'bg-blue-50'}`}>
-                      {tipoIcon[p.tipo] || '📄'}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-gray-800">{tipoLabel[p.tipo] || p.tipo}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${estadoStyle[p.estado] || estadoStyle.activo}`}>
-                          {p.estado}
-                        </span>
-                        {enMora && (
-                          <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-semibold animate-pulse">
-                            ⚠️ {p.cuotas_mora} en mora
-                          </span>
-                        )}
+                className="block bg-white rounded-2xl overflow-hidden hover:shadow-lg transition-all group"
+                style={{ border: `1.5px solid ${accentColor}22`, boxShadow: `0 1px 8px ${accentColor}0f` }}>
+
+                {/* ── FRANJA SUPERIOR DELGADA de color ── */}
+                <div className="h-1 w-full" style={{ background: accentColor }} />
+
+                <div className="p-6">
+
+                  {/* FILA 1: tipo + CRED + estado */}
+                  <div className="flex items-start justify-between gap-4 mb-5">
+                    <div className="flex items-center gap-4 min-w-0">
+                      <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0"
+                        style={{ background: `${accentColor}15` }}>
+                        {tipoIcon[p.tipo] || '📄'}
                       </div>
-                      <p className="text-gray-400 text-xs mt-1">
-                        {fmt(p.monto_capital)} · {p.tasa_interes}% {p.periodo_tasa} · {p.metodo_calculo}
-                      </p>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold uppercase tracking-widest mb-1"
+                          style={{ color: accentColor }}>
+                          {tipoLabel[p.tipo] || p.tipo}
+                        </p>
+                        {p.referencia
+                          ? <p className="font-black text-xl font-mono tracking-widest text-gray-900 leading-none">
+                              {p.referencia}
+                            </p>
+                          : <p className="text-gray-400 text-base italic">Sin referencia</p>
+                        }
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {enMora && (
+                        <span className="text-sm bg-red-100 text-red-600 border border-red-200 px-3 py-1 rounded-full font-bold">
+                          ⚠️ {p.cuotas_mora} en mora
+                        </span>
+                      )}
+                      <span className={`text-sm px-3 py-1 rounded-full font-bold border
+                        ${esSaldado      ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                          esRefinanciado ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                          enMora         ? 'bg-red-50 text-red-700 border-red-200' :
+                                           'bg-blue-50 text-blue-700 border-blue-200'}`}>
+                        {p.estado}
+                      </span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                        className="w-5 h-5 text-gray-300 group-hover:text-gray-600 group-hover:translate-x-1 transition-all">
+                        <polyline points="9 18 15 12 9 6"/>
+                      </svg>
+                    </div>
+                  </div>
+
+                  {/* SEPARADOR */}
+                  <div className="h-px bg-gray-100 mb-5" />
+
+                  {/* FILA 2: KPIs grandes + saldo pendiente */}
+                  <div className="flex items-end justify-between gap-6">
+                    <div className="flex-1 min-w-0">
+                      <div className="grid grid-cols-3 gap-3">
+                        {/* Capital */}
+                        <div className="rounded-xl p-3" style={{ background:`${accentColor}08`, border:`1px solid ${accentColor}20` }}>
+                          <p className="text-xs text-gray-400 font-semibold mb-1">Capital</p>
+                          <p className="text-base font-black text-gray-800">{fmt(p.monto_capital)}</p>
+                        </div>
+                        {/* Tasa */}
+                        <div className="rounded-xl p-3 bg-orange-50 border border-orange-100">
+                          <p className="text-xs text-orange-400 font-semibold mb-1">Tasa</p>
+                          <p className="text-base font-black text-orange-700">
+                            {p.tasa_interes > 0 ? `${p.tasa_interes}% ${p.periodo_tasa}` : 'Sin interés'}
+                          </p>
+                        </div>
+                        {/* Cuotas */}
+                        <div className="rounded-xl p-3 bg-blue-50 border border-blue-100">
+                          <p className="text-xs text-blue-400 font-semibold mb-1">Cuotas</p>
+                          <p className="text-base font-black text-blue-700">
+                            {totalCu > 0 ? `${pagadas} / ${totalCu}` : '—'}
+                          </p>
+                        </div>
+                      </div>
                       {p.descripcion_bien && (
-                        <p className="text-gray-400 text-xs mt-0.5 italic">{p.descripcion_bien}</p>
+                        <p className="text-sm text-gray-400 italic mt-3 truncate">"{p.descripcion_bien}"</p>
                       )}
                     </div>
+
+                    {/* Saldo pendiente — número grande */}
+                    <div className="text-right shrink-0">
+                      <p className="text-xs uppercase tracking-widest font-bold text-gray-400 mb-1">Pendiente</p>
+                      <p className="text-3xl font-black leading-none" style={{ color: pendienteColor }}>
+                        {fmt(pendiente)}
+                      </p>
+                    </div>
                   </div>
 
-                  {/* Monto pendiente */}
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-xs text-gray-400">Pendiente</p>
-                    <p className={`text-lg font-black ${enMora ? 'text-red-600' : 'text-gray-800'}`}>
-                      {fmt(pendiente)}
-                    </p>
-                    <p className="text-xs text-gray-400 mt-0.5 group-hover:text-blue-500 transition-colors">
-                      Ver detalle →
-                    </p>
-                  </div>
+                  {/* FILA 3: barra de progreso */}
+                  {totalCu > 0 && (
+                    <div className="mt-4">
+                      <div className="w-full bg-gray-100 rounded-full h-2">
+                        <div className="h-2 rounded-full transition-all"
+                          style={{ width:`${progreso}%`, background: accentColor }} />
+                      </div>
+                      <div className="flex justify-between text-xs text-gray-400 mt-1.5">
+                        <span>{pagadas} de {totalCu} cuotas pagadas</span>
+                        <span className="font-bold">{progreso}%</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-
-                {/* Barra de progreso */}
-                {p.tipo !== 'fiado' && totalCu > 0 && (
-                  <div className="mt-4">
-                    <div className="flex justify-between text-xs text-gray-400 mb-1.5">
-                      <span>{pagadas} de {totalCu} cuotas pagadas</span>
-                      <span className="font-semibold">{progreso}%</span>
-                    </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2">
-                      <div
-                        className={`h-2 rounded-full transition-all ${enMora ? 'bg-red-400' : progreso === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`}
-                        style={{ width: `${progreso}%` }} />
-                    </div>
-                  </div>
-                )}
               </Link>
             )
           })}
