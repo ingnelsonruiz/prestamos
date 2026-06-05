@@ -110,7 +110,7 @@ export default function Dashboard() {
   if (!data)       return <div className="text-gray-400 p-6 text-center">Cargando dashboard…</div>
   if (data.error)  return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error BD: {data.error}</div>
 
-  const { cartera, intereses, mora, recaudo, cartera_vencida, capital, cuotas_hoy, cuotas_semana, empenos_vencer } = data
+  const { cartera, intereses, mora, recaudo, cartera_vencida, capital, cuotas_hoy, cuotas_semana, empenos_vencer, otros_rubros = [] } = data
 
   const roi = recaudo.total > 0
     ? ((intereses.total / (recaudo.total - intereses.total)) * 100).toFixed(1)
@@ -183,6 +183,46 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      {/* ═══ OTROS RUBROS — fiado, adelanto, venta, empeño (siempre visibles) ═══ */}
+      {(() => {
+        const RUBROS = [
+          { tipo: 'fiado',    icono: '🌿', label: 'Fiados',    bg: 'bg-teal-50',   border: 'border-teal-200',   text: 'text-teal-700'   },
+          { tipo: 'adelanto', icono: '⚡', label: 'Adelantos', bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700' },
+          { tipo: 'venta',    icono: '🛍️', label: 'Ventas',    bg: 'bg-pink-50',   border: 'border-pink-200',   text: 'text-pink-700'   },
+          { tipo: 'empeno',   icono: '🔒', label: 'Empeños',   bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700' },
+        ]
+        return (
+          <div>
+            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">Otros rubros activos</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {RUBROS.map(cfg => {
+                const r = otros_rubros.find(x => x.tipo === cfg.tipo) || { cantidad: 0, capital_total: 0, saldo_pendiente: 0 }
+                return (
+                  <div key={cfg.tipo}
+                    className={`${cfg.bg} border ${cfg.border} rounded-xl p-4 cursor-pointer
+                      transition-transform hover:scale-[1.02] active:scale-[0.98]`}
+                    onDoubleClick={() => window.location.href = '/prestamos?filtro=activos'}
+                    title="Doble clic para ver en préstamos">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xl">{cfg.icono}</span>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${cfg.bg} ${cfg.border} ${cfg.text}`}>
+                        {r.cantidad} registro{r.cantidad !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <p className={`text-[11px] uppercase tracking-wide font-semibold ${cfg.text} opacity-70`}>{cfg.label}</p>
+                    <p className={`text-lg font-black ${cfg.text} mt-0.5`}>{fmt(r.saldo_pendiente)}</p>
+                    <div className={`text-[10px] mt-1 ${cfg.text} opacity-50 flex justify-between`}>
+                      <span>Capital: {fmt(r.capital_total)}</span>
+                      <span>Pendiente</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ═══ FILA 3 — KPIs con desglose temporal ═══ */}
       <div>

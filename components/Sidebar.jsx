@@ -62,10 +62,16 @@ export default function Sidebar({ onClose }) {
         {/* Solo admin */}
         {user?.rol === 'admin' && (
           <>
+            <Link href="/configuracion"
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-base font-medium transition-colors
+                ${pathname.startsWith('/configuracion') ? 'bg-blue-700 text-white' : 'text-blue-100 hover:bg-blue-800 hover:text-white'}`}>
+              <span>⚙️</span>
+              Configuración
+            </Link>
             <Link href="/usuarios"
               className={`flex items-center gap-3 px-4 py-3 rounded-lg text-base font-medium transition-colors
                 ${pathname.startsWith('/usuarios') ? 'bg-blue-700 text-white' : 'text-blue-100 hover:bg-blue-800 hover:text-white'}`}>
-              <span>⚙️</span>
+              <span>👤</span>
               Usuarios
             </Link>
             <Link href="/auditoria"

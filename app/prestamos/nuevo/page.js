@@ -164,20 +164,32 @@ function NuevoPrestamoContenido() {
     cliente_id:    clientePresel,
     monto_capital: capitalPresel || '',
   })
-  const [clientes, setClientes] = useState([])
-  const [cuotas, setCuotas]   = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState('')
+  const [clientes,   setClientes]   = useState([])
+  const [tiposList,  setTiposList]  = useState([])
+  const [cuotas,     setCuotas]     = useState([])
+  const [loading,    setLoading]    = useState(false)
+  const [error,      setError]      = useState('')
+
+  // comportamiento del tipo seleccionado
+  const tipoActual     = tiposList.find(t => t.codigo === form.tipo)
+  const comportamiento = tipoActual?.comportamiento ?? 'prestamo_normal'
+  const esCuentaAbierta = comportamiento === 'cuenta_abierta'
+  const esEmpeno        = comportamiento === 'empeno'
 
   useEffect(() => {
     fetch('/api/clientes').then(r=>r.json()).then(setClientes)
+    fetch('/api/configuracion/tipos').then(r=>r.json()).then(data => {
+      const activos = Array.isArray(data) ? data.filter(t => t.activo) : []
+      setTiposList(activos)
+    })
     // Fecha primer pago = hoy + 1 mes por defecto
     const d = new Date(); d.setMonth(d.getMonth()+1)
     setForm(f => ({...f, fecha_primer_pago: d.toISOString().split('T')[0]}))
   }, [])
 
-  // Calcular tabla de amortización en tiempo real
+  // Calcular tabla de amortización en tiempo real (solo para no cuenta_abierta)
   const calcular = useCallback(() => {
+    if (esCuentaAbierta) { setCuotas([]); return }
     const P  = parseFloat(form.monto_capital) - parseFloat(form.cuota_inicial||0)
     const n  = parseInt(form.num_cuotas)
     const t  = parseFloat(form.tasa_interes)
@@ -185,7 +197,7 @@ function NuevoPrestamoContenido() {
     const fn = form.metodo_calculo === 'frances' ? calcularFrances : calcularInteresPlano
     const result = fn('preview','preview',P,t,form.periodo_tasa,form.frecuencia_cobro,n,form.fecha_primer_pago)
     setCuotas(result)
-  }, [form])
+  }, [form, esCuentaAbierta])
 
   useEffect(() => { calcular() }, [calcular])
 
@@ -243,15 +255,15 @@ function NuevoPrestamoContenido() {
               <label className="text-xs font-medium text-gray-600">Tipo</label>
               <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                 value={form.tipo} onChange={e=>set('tipo',e.target.value)}>
-                <option value="prestamo">Préstamo</option>
-                <option value="adelanto">Adelanto (sin intereses)</option>
-                <option value="venta">Venta a crédito</option>
-                <option value="empeno">Empeño</option>
-                <option value="fiado">Fiado</option>
+                {tiposList.length === 0 && <option value="prestamo">Préstamo</option>}
+                {tiposList.map(t => (
+                  <option key={t.codigo} value={t.codigo}>{t.icono} {t.label}</option>
+                ))}
               </select>
             </div>
 
-            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
+            {/* Método — solo préstamo normal y empeño */}
+            {!esCuentaAbierta && (
               <div>
                 <label className="text-xs font-medium text-gray-600">Método</label>
                 <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
@@ -262,24 +274,23 @@ function NuevoPrestamoContenido() {
               </div>
             )}
 
-            <div className={form.tipo === 'fiado' ? 'col-span-2' : ''}>
+            <div className={esCuentaAbierta ? 'col-span-2' : ''}>
               <label className="text-xs font-medium text-gray-600">
-                {form.tipo === 'fiado' ? 'Total que debe ($) *' : 'Capital *'}
+                {esCuentaAbierta ? 'Total adeudado ($) *' : 'Capital *'}
               </label>
               <InputMiles required value={form.monto_capital} onChange={v=>set('monto_capital',v)}
                 placeholder="Ej: 500.000" />
             </div>
 
-            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
+            {!esCuentaAbierta && (
               <div>
                 <label className="text-xs font-medium text-gray-600">Cuota inicial</label>
-                <InputMiles value={form.cuota_inicial} onChange={v=>set('cuota_inicial',v)}
-                  placeholder="0" />
+                <InputMiles value={form.cuota_inicial} onChange={v=>set('cuota_inicial',v)} placeholder="0" />
               </div>
             )}
 
-            {/* Tasa solo para préstamo, venta, empeño */}
-            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
+            {/* Tasa, período — solo no cuenta_abierta */}
+            {!esCuentaAbierta && (
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Tasa (%)</label>
@@ -297,8 +308,8 @@ function NuevoPrestamoContenido() {
               </>
             )}
 
-            {/* Cuotas, frecuencia y fecha — solo para prestamo, venta, empeno */}
-            {form.tipo !== 'fiado' && form.tipo !== 'adelanto' && (
+            {/* Cuotas, frecuencia, fecha — solo no cuenta_abierta */}
+            {!esCuentaAbierta && (
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600">N° cuotas *</label>
@@ -321,63 +332,49 @@ function NuevoPrestamoContenido() {
               </>
             )}
 
-            {/* Adelanto — descripción del motivo */}
-            {form.tipo === 'adelanto' && (
+            {/* Cuenta abierta — descripción + fecha */}
+            {esCuentaAbierta && (
               <div className="col-span-2 space-y-3">
                 <div className="bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 text-sm text-teal-700">
-                  🤝 <strong>Adelanto sin intereses</strong> — cuenta abierta, sin cuotas fijas. El beneficiario devuelve cuando pueda o cuando se acuerde.
+                  {tipoActual?.icono} <strong>{tipoActual?.label}</strong> — cuenta abierta sin cuotas fijas ni interés.
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-600">
-                    ¿Para qué es el adelanto? <span className="text-gray-400">(motivo, destino)</span>
-                  </label>
+                  <label className="text-xs font-medium text-gray-600">Fecha *</label>
+                  <input type="date" max={new Date().toISOString().split('T')[0]}
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    value={form.fecha_primer_pago} onChange={e=>set('fecha_primer_pago',e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600">Descripción / motivo</label>
                   <textarea rows={3}
-                    placeholder="Ej: Adelanto de sueldo — quincena junio, Medicamentos EPS, Pasajes Valledupar, Emergencia familiar..."
+                    placeholder="Ej: 10 libras de queso, adelanto de nómina junio..."
                     className="mt-1 w-full border rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-teal-400"
                     value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
                 </div>
               </div>
             )}
 
-            {form.tipo==='fiado' && (
-              <>
-                <div>
-                  <label className="text-xs font-medium text-gray-600">Fecha del fiado *</label>
-                  <input type="date" max={new Date().toISOString().split('T')[0]}
-                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    value={form.fecha_primer_pago}
-                    onChange={e=>set('fecha_primer_pago',e.target.value)} />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-xs font-medium text-gray-600">
-                    ¿Qué le fió? <span className="text-gray-400">(productos, cantidades)</span>
-                  </label>
-                  <textarea rows={4}
-                    placeholder="Ej: 10 libras de queso $80.000, 2 arrobas de maíz $60.000..."
-                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
-                </div>
-              </>
-            )}
-
-            {(form.tipo==='venta'||form.tipo==='empeno') && (
+            {/* Descripción del bien — solo préstamo_normal y empeño (excepto tipos que ya lo piden arriba) */}
+            {!esCuentaAbierta && !esEmpeno && (
               <div className="col-span-2">
-                <label className="text-xs font-medium text-gray-600">
-                  Descripción del bien {form.tipo==='empeno' && <span className="text-gray-400">(marca, modelo, color, placa, serial, estado...)</span>}
-                </label>
-                {form.tipo==='empeno'
-                  ? <textarea rows={4}
-                      placeholder="Ej: Moto Honda CB 125cc, año 2022, color rojo, placa ABC123, en buen estado. Serie: XYZ789..."
-                      className="mt-1 w-full border rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary-500"
-                      value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
-                  : <input type="text" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
-                      value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
-                }
+                <label className="text-xs font-medium text-gray-600">Descripción del bien <span className="text-gray-400">(opcional)</span></label>
+                <input type="text" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
               </div>
             )}
 
-            {form.tipo==='empeno' && (
+            {/* Campos de empeño */}
+            {esEmpeno && (
               <>
+                <div className="col-span-2">
+                  <label className="text-xs font-medium text-gray-600">
+                    Descripción del bien <span className="text-gray-400">(marca, modelo, color, serial, estado...)</span>
+                  </label>
+                  <textarea rows={3}
+                    placeholder="Ej: Moto Honda CB 125cc, año 2022, color rojo, placa ABC123..."
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
+                </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Valor comercial del bien</label>
                   <input type="number" min="0" placeholder="0"
@@ -396,30 +393,25 @@ function NuevoPrestamoContenido() {
 
           <button type="submit" disabled={loading}
             className="w-full bg-primary-600 text-white rounded-lg py-2.5 font-medium hover:bg-primary-700 disabled:opacity-50">
-            {loading ? 'Guardando...' : 'Crear y generar cuotas'}
+            {loading ? 'Guardando...' : esCuentaAbierta ? `Registrar ${tipoActual?.label ?? 'cuenta abierta'}` : 'Crear y generar cuotas'}
           </button>
         </form>
 
         {/* Panel derecho */}
         <div className="bg-white rounded-xl border p-6">
-          {form.tipo === 'fiado' || form.tipo === 'adelanto'
-            ? form.tipo === 'fiado'
-              ? <FiadoResumen clienteId={form.cliente_id} montoNuevo={parseFloat(form.monto_capital)||0} clientes={clientes} />
-              : <div className="text-center py-12">
-                  <p className="text-5xl mb-4">🤝</p>
-                  <p className="font-semibold text-gray-700 text-lg">Adelanto sin intereses</p>
-                  <p className="text-sm text-gray-400 mt-2">Se registra como cuenta abierta.</p>
-                  <p className="text-sm text-gray-400">El beneficiario devuelve el capital cuando se acuerde.</p>
-                  {parseFloat(form.monto_capital) > 0 && (
-                    <div className="mt-6 bg-teal-50 border border-teal-200 rounded-xl p-4">
-                      <p className="text-xs text-teal-500 uppercase font-semibold">Total a devolver</p>
-                      <p className="text-3xl font-black text-teal-700 mt-1">
-                        {new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(parseFloat(form.monto_capital))}
-                      </p>
-                      <p className="text-xs text-teal-400 mt-1">Sin intereses ✓</p>
-                    </div>
-                  )}
-                </div>
+          {esCuentaAbierta
+            ? <div className="text-center py-12">
+                <p className="text-5xl mb-4">{tipoActual?.icono ?? '📋'}</p>
+                <p className="font-semibold text-gray-700 text-lg">{tipoActual?.label ?? 'Cuenta abierta'}</p>
+                <p className="text-sm text-gray-400 mt-2">Se registra como cuenta abierta — sin cuotas fijas ni interés.</p>
+                {parseFloat(form.monto_capital) > 0 && (
+                  <div className="mt-6 bg-teal-50 border border-teal-200 rounded-xl p-4">
+                    <p className="text-xs text-teal-500 uppercase font-semibold">Total a devolver</p>
+                    <p className="text-3xl font-black text-teal-700 mt-1">{fmt(parseFloat(form.monto_capital))}</p>
+                    <p className="text-xs text-teal-400 mt-1">Sin intereses ✓</p>
+                  </div>
+                )}
+              </div>
             : <>
                 <h3 className="font-semibold text-gray-700 mb-4">Vista previa tabla de amortización</h3>
                 {cuotas.length === 0

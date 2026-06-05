@@ -19,6 +19,7 @@ export async function GET() {
       cuotasHoy,
       cuotasSemana,
       empenosVencer,
+      otrosRubros,
     ] = await Promise.all([
 
       // 1. Capital y conteo por estado — mora detectada por fechas (no por campo estado)
@@ -192,6 +193,24 @@ export async function GET() {
           AND p.fecha_limite_rescate BETWEEN $1 AND $1::date + 15
         ORDER BY p.fecha_limite_rescate
       `, [hoy]),
+
+      // 12. Otros rubros activos por tipo (fiado, adelanto, venta, empeno)
+      query(`
+        SELECT
+          p.tipo,
+          COUNT(*)::int                                                   AS cantidad,
+          COALESCE(SUM(p.monto_capital), 0)                               AS capital_total,
+          COALESCE(SUM(
+            (SELECT SUM(cu.monto_cuota - cu.monto_pagado)
+             FROM ${S}.cred_cuotas cu
+             WHERE cu.producto_id = p.id AND cu.estado != 'pagada')
+          ), 0)                                                           AS saldo_pendiente
+        FROM ${S}.cred_productos p
+        WHERE p.tipo IN ('fiado','adelanto','venta','empeno')
+          AND p.estado NOT IN ('saldado','decomisado','refinanciado')
+        GROUP BY p.tipo
+        ORDER BY p.tipo
+      `),
     ])
 
     const ce = carteraEstados.rows[0]
@@ -246,6 +265,12 @@ export async function GET() {
       cuotas_hoy:     cuotasHoy.rows,
       cuotas_semana:  cuotasSemana.rows,
       empenos_vencer: empenosVencer.rows,
+      otros_rubros:   otrosRubros.rows.map(r => ({
+        tipo:            r.tipo,
+        cantidad:        r.cantidad,
+        capital_total:   parseFloat(r.capital_total),
+        saldo_pendiente: parseFloat(r.saldo_pendiente),
+      })),
     })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
