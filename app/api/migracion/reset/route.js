@@ -14,6 +14,7 @@ export async function POST(request) {
     await query(`DELETE FROM ${S}.cred_cuotas`)
     await query(`DELETE FROM ${S}.cred_productos`)
     await query(`UPDATE ${S}.cred_configuracion SET valor='1', actualizado_en=NOW() WHERE clave='recibo_consecutivo'`)
+    await query(`UPDATE ${S}.cred_configuracion SET valor='1', actualizado_en=NOW() WHERE clave='credito_consecutivo'`)
 
     await auditar({
       ...u,

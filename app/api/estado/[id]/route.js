@@ -60,7 +60,28 @@ export async function GET(request, { params }) {
       [id]
     )
 
-    // Historial de últimos pagos (últimos 5 por producto)
+    // Cuotas de productos activos (para mostrar plan de pagos)
+    const cuotasRes = await query(
+      `SELECT cu.producto_id, cu.numero_cuota, cu.fecha_vencimiento,
+              cu.monto_cuota, cu.monto_pagado, cu.abono_capital,
+              cu.abono_interes, cu.estado
+       FROM ${S}.cred_cuotas cu
+       JOIN ${S}.cred_productos p ON p.id = cu.producto_id
+       WHERE p.cliente_id = $1
+         AND p.estado NOT IN ('saldado','decomisado','refinanciado')
+         AND cu.fecha_vencimiento != '2099-12-31'
+       ORDER BY cu.producto_id, cu.numero_cuota`,
+      [id]
+    )
+
+    // Agrupar cuotas por producto_id
+    const cuotasPorProducto = {}
+    for (const c of cuotasRes.rows) {
+      if (!cuotasPorProducto[c.producto_id]) cuotasPorProducto[c.producto_id] = []
+      cuotasPorProducto[c.producto_id].push(c)
+    }
+
+    // Historial de últimos pagos (últimos 10)
     const pagosRes = await query(
       `SELECT pg.numero_recibo, pg.monto, pg.fecha_pago, pg.metodo_pago,
               cu.numero_cuota, pg.producto_id
@@ -77,6 +98,7 @@ export async function GET(request, { params }) {
       documento: cliente.rows[0].documento,
       productos: productos.rows,
       historial: historial.rows,
+      cuotas:    cuotasPorProducto,
       ultimos_pagos: pagosRes.rows,
     })
   } catch (error) {

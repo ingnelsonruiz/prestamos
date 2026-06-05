@@ -302,19 +302,47 @@ export default function DetallePrestamo() {
 
       {/* Encabezado */}
       <div className="bg-white rounded-xl border p-6">
+
+        {/* ── NÚMERO DE CRÉDITO PROMINENTE ── */}
+        {data.referencia && (
+          <div className="mb-5 flex items-center gap-4 p-4 rounded-2xl"
+            style={{
+              background: 'linear-gradient(135deg, #0d1f3c 0%, #1e3a5f 50%, #1e40af 100%)',
+              boxShadow: '0 4px 24px rgba(13,31,60,0.25)',
+            }}>
+            {/* Ícono hash */}
+            <div className="shrink-0 w-12 h-12 rounded-xl flex items-center justify-center text-white font-black text-xl"
+              style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)' }}>
+              #
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.25em] text-blue-300 mb-0.5">
+                Número de Crédito
+              </p>
+              <p className="text-2xl md:text-3xl font-black text-white tracking-widest font-mono leading-none">
+                {data.referencia}
+              </p>
+            </div>
+            {/* Badge tipo */}
+            <div className="shrink-0">
+              <span className="px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-widest"
+                style={{ background: 'rgba(234,179,8,0.2)', border: '1px solid rgba(234,179,8,0.4)', color: '#fde68a' }}>
+                {data.tipo}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="flex justify-between items-start flex-wrap gap-4">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs uppercase font-bold text-primary-600 bg-primary-50 px-2 py-1 rounded">
-                {data.tipo}
-              </span>
-              {data.referencia && (
-                <span className="text-xs font-bold font-mono bg-gray-100 text-gray-600 px-2 py-1 rounded border border-gray-200">
-                  {data.referencia}
+              {!data.referencia && (
+                <span className="text-xs uppercase font-bold text-primary-600 bg-primary-50 px-2 py-1 rounded">
+                  {data.tipo}
                 </span>
               )}
             </div>
-            <h2 className="text-xl font-bold mt-2">{data.nombre_cliente}</h2>
+            <h2 className="text-xl font-bold mt-0">{data.nombre_cliente}</h2>
             <p className="text-gray-500 text-sm">{data.documento}</p>
           </div>
           {/* Datos clave del préstamo en el encabezado */}

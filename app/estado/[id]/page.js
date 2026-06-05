@@ -38,6 +38,7 @@ export default function EstadoCuenta() {
 
   const productos    = data.productos || []
   const historial    = data.historial || []
+  const cuotas       = data.cuotas || {}
   const deudaTotal   = productos.reduce((s, p) => s + parseFloat(p.saldo_total || 0), 0)
   const pagadoTotal  = productos.reduce((s, p) => s + parseFloat(p.total_pagado || 0), 0)
   const tieneMora    = productos.some(p => parseInt(p.cuotas_mora || 0) > 0)
@@ -230,13 +231,65 @@ export default function EstadoCuenta() {
                       </div>
                     )}
 
-                    {/* Próxima cuota */}
+                    {/* Próxima cuota destacada */}
                     {p.proxima_fecha && p.tipo !== 'fiado' && (
-                      <div className="bg-blue-600 text-white rounded-xl p-4">
-                        <p className="text-xs text-blue-200 uppercase tracking-wide mb-1">Próxima cuota</p>
+                      <div className="bg-[#1e3a5f] text-white rounded-xl p-4">
+                        <p className="text-xs text-blue-300 uppercase tracking-widest mb-1">📅 Próxima cuota a pagar</p>
                         <div className="flex justify-between items-center">
-                          <p className="font-bold">{fmtFecha(p.proxima_fecha)}</p>
-                          <p className="text-xl font-black">{fmt(p.proxima_valor)}</p>
+                          <p className="font-bold text-lg">{fmtFecha(p.proxima_fecha)}</p>
+                          <p className="text-2xl font-black">{fmt(p.proxima_valor)}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── TABLA DE CUOTAS ── */}
+                    {cuotas[p.id]?.length > 0 && (
+                      <div className="bg-white rounded-xl border overflow-hidden">
+                        <div className="px-4 py-3 border-b bg-gray-50 flex items-center gap-2">
+                          <span className="text-sm">📋</span>
+                          <p className="text-xs font-black uppercase tracking-widest text-gray-600">Plan de pagos</p>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b bg-gray-50">
+                                <th className="text-left px-3 py-2 text-gray-400 font-semibold">#</th>
+                                <th className="text-left px-3 py-2 text-gray-400 font-semibold">Fecha vencimiento</th>
+                                <th className="text-right px-3 py-2 text-gray-400 font-semibold">Cuota</th>
+                                <th className="text-right px-3 py-2 text-gray-400 font-semibold">Capital</th>
+                                <th className="text-right px-3 py-2 text-gray-400 font-semibold">Interés</th>
+                                <th className="text-center px-3 py-2 text-gray-400 font-semibold">Estado</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {cuotas[p.id].map((c, idx) => {
+                                const hoyStr = new Date().toISOString().split('T')[0]
+                                const vence  = c.fecha_vencimiento?.split('T')[0]
+                                const esMora = vence < hoyStr && c.estado !== 'pagada'
+                                return (
+                                  <tr key={idx}
+                                    className={`border-b last:border-0 transition-colors
+                                      ${c.estado === 'pagada' ? 'bg-green-50' :
+                                        esMora               ? 'bg-red-50' :
+                                        c.estado === 'parcial'? 'bg-yellow-50' : ''}`}>
+                                    <td className="px-3 py-2.5 font-bold text-gray-500">{c.numero_cuota}</td>
+                                    <td className="px-3 py-2.5 font-semibold text-gray-700">
+                                      {vence ? new Date(vence + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right font-bold text-gray-800">{fmt(c.monto_cuota)}</td>
+                                    <td className="px-3 py-2.5 text-right text-gray-600">{fmt(c.abono_capital)}</td>
+                                    <td className="px-3 py-2.5 text-right text-orange-500">{fmt(c.abono_interes)}</td>
+                                    <td className="px-3 py-2.5 text-center">
+                                      {c.estado === 'pagada'  && <span className="inline-block px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">✓ Pagada</span>}
+                                      {c.estado === 'parcial' && <span className="inline-block px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-semibold">Parcial</span>}
+                                      {c.estado === 'pendiente' && !esMora && <span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 text-blue-600 font-semibold">Pendiente</span>}
+                                      {esMora && <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-semibold">⚠️ Vencida</span>}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
                     )}
