@@ -119,9 +119,18 @@ export default function CobrosPage() {
   const totalPendiente = gruposFiltrados.reduce((s,g) =>
     s + cuotasParaMostrar(g.cuotas).reduce((ss,c) => ss + pendiente(c), 0), 0)
 
-  const abrirModal = c => {
-    setModal(c); setMonto(String(pendiente(c)))
+  const abrirModal = (c, montoInicial) => {
+    setModal(c)
+    setMonto(montoInicial !== undefined ? String(montoInicial) : String(pendiente(c)))
     setNotas(''); setFechaPago(hoy); setError('')
+  }
+
+  // Abre el modal con la PRIMERA cuota pendiente y el total del crédito
+  const abrirModalTodo = (g) => {
+    const primera = g.cuotas[0]
+    if (!primera) return
+    const totalG = g.cuotas.reduce((s, c) => s + pendiente(c), 0)
+    abrirModal(primera, totalG)
   }
 
   const abrirModalWA = (e, g) => {
@@ -318,9 +327,11 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
 
           return (
             <div key={g.producto_id} className={`bg-white rounded-xl border overflow-x-auto ${tieneMora ? 'border-red-300' : ''}`}>
-              {/* Cabecera acordeón */}
-              <button onClick={() => toggle(g.producto_id)}
-                className="w-full flex items-center justify-between px-5 py-5 hover:bg-gray-50 transition-colors">
+              {/* Cabecera acordeón — div en lugar de button para poder anidar botones */}
+              <div onClick={() => toggle(g.producto_id)}
+                role="button" tabIndex={0}
+                onKeyDown={e => e.key === 'Enter' && toggle(g.producto_id)}
+                className="w-full flex items-center justify-between px-5 py-5 hover:bg-gray-50 transition-colors cursor-pointer">
 
                 {/* Izquierda: icono + info */}
                 <div className="flex items-center gap-4 flex-1 min-w-0">
@@ -373,15 +384,21 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                   </div>
                 </div>
 
-                {/* Derecha: monto + flecha */}
+                {/* Derecha: monto + botón pagar todo + flecha */}
                 <div className="flex items-center gap-3 flex-shrink-0 ml-4">
                   <div className="text-right">
                     <p className="text-xs text-gray-400">{cuotasVista.length} cuota(s)</p>
                     <p className="text-xl font-black text-blue-600">{fmt(totalG)}</p>
                   </div>
+                  <button
+                    onClick={e => { e.stopPropagation(); abrirModalTodo(g) }}
+                    className="bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors whitespace-nowrap shadow-sm"
+                    title="Registrar un pago por el saldo total del crédito">
+                    💰 Pagar todo
+                  </button>
                   <span className="text-gray-400 text-xl">{abierto ? '▲' : '▼'}</span>
                 </div>
-              </button>
+              </div>
 
               {/* Cuotas */}
               {abierto && (
@@ -430,6 +447,24 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                       </tr>
                     ))}
                   </tbody>
+                  {/* Fila de totales */}
+                  <tfoot className="border-t-2 border-gray-300 bg-gray-50">
+                    <tr>
+                      <td colSpan={2} className="px-5 py-2.5 text-xs font-bold text-gray-500 uppercase tracking-wide">
+                        Total ({cuotasVista.length} cuota{cuotasVista.length !== 1 ? 's' : ''})
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-black text-gray-800">
+                        {fmt(cuotasVista.reduce((s,c) => s + parseFloat(c.monto_cuota), 0))}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-black text-green-700">
+                        {fmt(cuotasVista.reduce((s,c) => s + parseFloat(c.monto_pagado || 0), 0))}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-black text-blue-700">
+                        {fmt(cuotasVista.reduce((s,c) => s + pendiente(c), 0))}
+                      </td>
+                      <td className="px-4 py-2.5"></td>
+                    </tr>
+                  </tfoot>
                 </table>
               )}
             </div>
@@ -596,13 +631,17 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
         </div>
       )}
 
-      {/* Modal pago */}
+      {/* Modal pago — panel fijo esquina superior derecha (no tapa la tabla) */}
       {modal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4">
-            <h3 className="text-lg font-bold">
+        <div className="fixed top-16 right-4 z-50 w-80 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden">
+          {/* Cabecera con botón cerrar */}
+          <div className="flex items-center justify-between px-5 py-3 bg-primary-600 text-white">
+            <h3 className="text-sm font-bold">
               {modal.tipo_producto==='fiado' ? '🌿 Abono fiado finca' : '💳 Registrar pago'}
             </h3>
+            <button onClick={()=>setModal(null)} className="text-white/70 hover:text-white text-lg leading-none">✕</button>
+          </div>
+          <div className="p-5 space-y-4">
             {modal.tipo_producto==='fiado' && (
               <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-xs text-green-700">
                 Cuenta abierta sin interés — abona lo que pueda.
@@ -610,8 +649,30 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
             )}
             <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
               <p><span className="text-gray-500">Cliente:</span> <strong>{modal.nombre_cliente}</strong></p>
-              {modal.tipo_producto!=='fiado' && <p><span className="text-gray-500">Cuota:</span> #{modal.numero_cuota}</p>}
-              <p><span className="text-gray-500">Pendiente:</span> <strong className="text-blue-600">{fmt(pendiente(modal))}</strong></p>
+              {modal.tipo_producto !== 'fiado' && (
+                <p><span className="text-gray-500">Desde cuota:</span> #{modal.numero_cuota}</p>
+              )}
+              <p><span className="text-gray-500">Pendiente cuota:</span> <strong className="text-blue-600">{fmt(pendiente(modal))}</strong></p>
+              {(() => {
+                const montoN = parseFloat(monto) || 0
+                if (montoN <= 0) return null
+                // Calcular cuántas cuotas cubre el monto ingresado
+                const grupo = grupos.find(g => g.producto_id === modal.producto_id)
+                if (!grupo) return null
+                let restante = montoN
+                let cubrasCuotas = 0
+                for (const c of grupo.cuotas) {
+                  if (restante <= 0) break
+                  restante -= pendiente(c)
+                  cubrasCuotas++
+                }
+                if (cubrasCuotas > 1) return (
+                  <p className="text-green-600 font-semibold text-xs mt-1">
+                    ✅ Cubre {cubrasCuotas} cuota{cubrasCuotas > 1 ? 's' : ''} automáticamente
+                  </p>
+                )
+                return null
+              })()}
             </div>
             {error && <p className="text-red-500 text-sm">{error}</p>}
             <div>

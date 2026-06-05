@@ -671,7 +671,14 @@ export default function DetallePrestamo() {
                     </span>
                   </td>
                   {data.tipo !== 'fiado' && (
-                    <td className="px-4 py-2.5 text-gray-500">#{p.numero_cuota}</td>
+                    <td className="px-4 py-2.5 text-gray-500">
+                      {parseFloat(p.monto) > parseFloat(p.monto_cuota)
+                        ? <span className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+                            Múltiples cuotas
+                          </span>
+                        : `#${p.numero_cuota}`
+                      }
+                    </td>
                   )}
                   <td className="px-4 py-2.5 text-right font-semibold text-green-600">
                     {fmt(p.monto)}
