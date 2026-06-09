@@ -21,7 +21,7 @@ export default function ClientesPage() {
   const cargar = (q='') => {
     fetch(`/api/clientes?q=${q}`)
       .then(r => r.json())
-      .then(setClientes)
+      .then(data => setClientes(Array.isArray(data) ? data : []))
   }
 
   useEffect(() => { cargar() }, [])
@@ -61,8 +61,44 @@ export default function ClientesPage() {
         onChange={e => { setBuscar(e.target.value); cargar(e.target.value) }}
       />
 
-      {/* Tabla */}
-      <div className="bg-white rounded-xl border overflow-hidden">
+      {/* ── Vista móvil: tarjetas ── */}
+      <div className="lg:hidden space-y-2">
+        {clientes.length === 0 && (
+          <p className="text-center text-gray-400 py-10 text-sm">Sin clientes registrados</p>
+        )}
+        {clientes.map(c => (
+          <Link key={c.id} href={`/clientes/${c.id}`}
+            className="block bg-white rounded-xl border px-4 py-3 hover:bg-gray-50 transition-colors active:scale-[0.99]">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 truncate">{c.nombre}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{c.documento}</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${estadoColor[c.estado_calculado] || estadoColor.sin_prestamos}`}>
+                  {(c.estado_calculado||'sin préstamos').replace('_',' ')}
+                </span>
+                <span className="text-gray-300">›</span>
+              </div>
+            </div>
+            {(c.telefono || (c.productos_activos > 0)) && (
+              <div className="flex items-center gap-3 mt-1.5">
+                {c.telefono && (
+                  <span className="text-xs text-gray-500">📞 {c.telefono}</span>
+                )}
+                {c.productos_activos > 0 && (
+                  <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-medium">
+                    {c.productos_activos} activo{c.productos_activos !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+            )}
+          </Link>
+        ))}
+      </div>
+
+      {/* ── Vista desktop: tabla ── */}
+      <div className="hidden lg:block bg-white rounded-xl border overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
             <tr>

@@ -53,14 +53,14 @@ function PrestamosContent() {
       </div>
 
       {/* Búsqueda + filtros */}
-      <div className="flex flex-col sm:flex-row gap-3">
+      <div className="flex flex-col gap-3">
         <input type="text" placeholder="Buscar por nombre o cédula..."
-          className="flex-1 border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          className="w-full border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           value={buscar} onChange={e => setBuscar(e.target.value)} />
-        <div className="flex gap-2">
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
           {[['activos','Activos'],['todos','Todos'],['saldado','Saldados'],['en_mora','En mora'],['refinanciado','Refinanciados']].map(([key,label]) => (
             <button key={key} onClick={() => setFiltroEstado(key)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors
+              className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap flex-shrink-0
                 ${filtroEstado===key ? 'bg-primary-600 text-white' : 'bg-white border text-gray-600 hover:bg-gray-50'}`}>
               {label}
             </button>

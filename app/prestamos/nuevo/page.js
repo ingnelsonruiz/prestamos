@@ -299,11 +299,9 @@ function NuevoPrestamoContenido() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Período tasa</label>
-                  <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
-                    value={form.periodo_tasa} onChange={e=>set('periodo_tasa',e.target.value)}>
-                    {['diario','semanal','quincenal','mensual','anual'].map(p=>
-                      <option key={p} value={p}>{p}</option>)}
-                  </select>
+                  <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500 select-none">
+                    Mensual
+                  </div>
                 </div>
               </>
             )}

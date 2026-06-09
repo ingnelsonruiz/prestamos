@@ -555,9 +555,15 @@ export default function DetallePrestamo() {
       <div className="bg-white rounded-xl border overflow-hidden">
         <div className="px-6 py-4 border-b flex justify-between items-center">
           <h3 className="font-semibold text-gray-700">Tabla de cuotas</h3>
-          <Link href="/cobros" className="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700">
-            Registrar cobro
-          </Link>
+          {['refinanciado','saldado'].includes(data.estado) ? (
+            <span className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 text-gray-400 cursor-not-allowed select-none" title={data.estado === 'refinanciado' ? 'Crédito refinanciado — los cobros se registran en el nuevo crédito' : 'Crédito saldado'}>
+              Registrar cobro
+            </span>
+          ) : (
+            <Link href="/cobros" className="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700">
+              Registrar cobro
+            </Link>
+          )}
         </div>
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
@@ -764,10 +770,9 @@ export default function DetallePrestamo() {
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-600 block mb-1">Período tasa</label>
-                  <select className="w-full border rounded-xl px-3 py-2 text-sm"
-                    value={convertForm.periodo_tasa} onChange={e => setC('periodo_tasa', e.target.value)}>
-                    {['diario','semanal','quincenal','mensual','anual'].map(p => <option key={p}>{p}</option>)}
-                  </select>
+                  <div className="w-full border rounded-xl px-3 py-2 text-sm bg-gray-50 text-gray-500 select-none">
+                    Mensual
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-600 block mb-1">N° cuotas</label>
@@ -981,11 +986,9 @@ export default function DetallePrestamo() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Período tasa</label>
-                <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
-                  value={form.periodo_tasa} onChange={e=>set('periodo_tasa',e.target.value)}>
-                  {['diario','semanal','quincenal','mensual','anual'].map(p=>
-                    <option key={p} value={p}>{p}</option>)}
-                </select>
+                <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500 select-none">
+                  Mensual
+                </div>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">N° cuotas</label>

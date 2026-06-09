@@ -56,7 +56,11 @@ export default function LayoutWrapper({ children }) {
             <p className="font-bold text-sm leading-tight">💼 Inversiones</p>
             <p className="text-blue-300 text-xs">Hnos Liñán</p>
           </div>
-          <div className="w-10" /> {/* spacer */}
+          <Link href="/prestamos/nuevo"
+            className="w-10 h-10 flex items-center justify-center bg-blue-500 hover:bg-blue-400 rounded-xl text-white font-bold text-xl transition-colors"
+            title="Nuevo préstamo">
+            +
+          </Link>
         </header>
 
         {/* Banner modo prueba */}

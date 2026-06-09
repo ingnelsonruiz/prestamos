@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
 /* ── SVG Icons ── */
@@ -79,6 +79,15 @@ export default function LoginPage() {
   const [error, setError]   = useState('')
   const [loading, setLoading] = useState(false)
   const [showPass, setShowPass] = useState(false)
+  const [dbStatus, setDbStatus] = useState('checking') // 'checking' | 'ok' | 'error'
+  const [dbMs, setDbMs]         = useState(null)
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then(r => r.json())
+      .then(d => { setDbStatus(d.ok ? 'ok' : 'error'); setDbMs(d.ms ?? null) })
+      .catch(() => setDbStatus('error'))
+  }, [])
 
   const login = async e => {
     e.preventDefault()
@@ -386,6 +395,9 @@ export default function LoginPage() {
             style={{ background: 'white', border: '1px solid #e2e8f0' }}>
             {[
               { icon: <IconShield />, text: 'Conexión cifrada · JWT HS256 · Sesión 8h', color: '#3b82f6' },
+              { icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5"><ellipse cx="12" cy="12" rx="9" ry="5"/><path d="M3 12c0 2.761 4.03 5 9 5s9-2.239 9-5"/><path d="M3 7v5m18-5v5"/></svg>,
+                text: dbStatus === 'checking' ? 'Verificando base de datos…' : dbStatus === 'ok' ? `Base de datos conectada${dbMs ? ' · ' + dbMs + 'ms' : ''}` : 'Sin conexión a la base de datos',
+                color: dbStatus === 'checking' ? '#f59e0b' : dbStatus === 'ok' ? '#10b981' : '#ef4444' },
               { icon: <IconCheck />, text: 'Auditoría completa por usuario e IP', color: '#10b981' },
               { icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>, text: 'Gestión de cartera crediticia · v2.0', color: '#a855f7' },
             ].map((item, i) => (

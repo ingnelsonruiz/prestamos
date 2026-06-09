@@ -352,22 +352,22 @@ export default function Dashboard() {
       </div>
 
       {/* Accesos rápidos */}
-      <div className="flex flex-wrap gap-3 pt-2">
+      <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-3 pt-2">
         <Link href="/prestamos/nuevo"
-          className="bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-          + Nuevo préstamo
+          className="flex items-center justify-center gap-2 bg-blue-600 text-white px-5 py-3 rounded-xl text-sm font-semibold hover:bg-blue-700 transition-colors">
+          ➕ Nuevo préstamo
         </Link>
         <Link href="/clientes"
-          className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
-          Ver clientes
+          className="flex items-center justify-center gap-2 bg-white border text-gray-700 px-5 py-3 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-colors">
+          👥 Clientes
         </Link>
         <Link href="/cobros"
-          className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
-          Registrar cobro
+          className="flex items-center justify-center gap-2 bg-white border text-gray-700 px-5 py-3 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-colors">
+          💳 Cobros
         </Link>
         <Link href="/informes"
-          className="bg-white border text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
-          Ver informes
+          className="flex items-center justify-center gap-2 bg-white border text-gray-700 px-5 py-3 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-colors">
+          📈 Informes
         </Link>
       </div>
     </div>

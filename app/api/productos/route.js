@@ -40,22 +40,20 @@ export async function POST(request) {
       frecuencia_cobro, num_cuotas, fecha_primer_pago, con_interes,
       metodo_calculo, cuota_inicial, descripcion_bien,
       valor_comercial_bien, fecha_limite_rescate, notas,
-      es_refinanciacion_de  // ID del crédito original que se refinancia
+      es_refinanciacion_de
     } = body
 
     if (!cliente_id || !tipo || !monto_capital)
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 })
 
-    // Generar referencia CRED-XXXXXX
     const confRef = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='credito_consecutivo'`)
     const numRef  = parseInt(confRef.rows[0]?.valor || '1')
-    const referencia = `CRED-${String(numRef).padStart(6, '0')}`
+    const referencia = 'CRED-' + String(numRef).padStart(6, '0')
     await query(
       `UPDATE ${S}.cred_configuracion SET valor=$1 WHERE clave='credito_consecutivo'`,
       [String(numRef + 1)]
     )
 
-    // Fiado y Adelanto: cuenta abierta sin cuotas ni interés
     if (tipo === 'fiado' || tipo === 'adelanto') {
       const id = uuidv4()
       const prod = await query(
@@ -97,21 +95,17 @@ export async function POST(request) {
        es_refinanciacion_de||null]
     )
 
-    // Si es refinanciación, cerrar el crédito original
     if (es_refinanciacion_de) {
       await query(
-        `UPDATE ${S}.cred_productos
-         SET estado='refinanciado', refinanciado_por=$1
-         WHERE id=$2`,
+        `UPDATE ${S}.cred_productos SET estado='refinanciado', refinanciado_por=$1 WHERE id=$2`,
         [id, es_refinanciacion_de]
       )
     }
 
-    // Convertir fecha_primer_pago a string YYYY-MM-DD (PostgreSQL la devuelve como Date)
     const prod0 = { ...prod.rows[0], cliente_id }
     if (prod0.fecha_primer_pago instanceof Date) {
       const d = prod0.fecha_primer_pago
-      prod0.fecha_primer_pago = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+      prod0.fecha_primer_pago = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')
     } else if (prod0.fecha_primer_pago && typeof prod0.fecha_primer_pago !== 'string') {
       prod0.fecha_primer_pago = String(prod0.fecha_primer_pago).split('T')[0]
     }
@@ -120,7 +114,7 @@ export async function POST(request) {
     if (cuotas.length > 0) {
       const vals = cuotas.map((_,i) => {
         const b = i*11
-        return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},$${b+11})`
+        return '($' + (b+1) + ',$' + (b+2) + ',$' + (b+3) + ',$' + (b+4) + ',$' + (b+5) + ',$' + (b+6) + ',$' + (b+7) + ',$' + (b+8) + ',$' + (b+9) + ',$' + (b+10) + ',$' + (b+11) + ')'
       }).join(',')
       const params = cuotas.flatMap(c => [
         c.id,c.producto_id,c.cliente_id,c.numero_cuota,
@@ -133,6 +127,21 @@ export async function POST(request) {
           abono_interes,abono_capital,saldo_pendiente,monto_pagado,estado)
          VALUES ${vals}`, params
       )
+
+      const interesTotal = cuotas.reduce((s, c) => s + (c.abono_interes || 0), 0)
+      const totalAPagar  = cuotas.reduce((s, c) => s + (c.monto_cuota  || 0), 0)
+      const montoPrimera = cuotas[0]?.monto_cuota || 0
+      await query(
+        `INSERT INTO ${S}.cred_historial_recalculos
+           (id, producto_id, tipo, capital_original,
+            capital_saldo_antes, capital_saldo_despues, capital_abonado,
+            interes_pendiente_antes, interes_pendiente_despues,
+            num_cuotas_total, num_cuotas_antes, num_cuotas_despues,
+            monto_cuota_antes, monto_cuota_despues,
+            total_pendiente_antes, total_pendiente_despues)
+         VALUES ($1,$2,'creacion',$3,$3,$3,0,$4,$4,$5,$5,$5,$6,$6,$7,$7)`,
+        [uuidv4(), id, capitalFinanciar, interesTotal, cuotas.length, montoPrimera, totalAPagar]
+      )
     }
 
     const saldoRes = await query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`)
@@ -140,13 +149,13 @@ export async function POST(request) {
     await query(
       `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
        VALUES ($1,'desembolso',$2,$3,$4,$5)`,
-      [uuidv4(), -capitalFinanciar, `Desembolso — ${cliente_id}`, id, saldoAnt - capitalFinanciar]
+      [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id, saldoAnt - capitalFinanciar]
     )
 
     const u = await getUsuarioDesdeRequest(request)
     const accion = es_refinanciacion_de ? ACCIONES.REFINANCIAR : ACCIONES.CREAR_PRESTAMO
     await auditar({ ...u, accion, modulo: MODULOS.PRESTAMOS,
-      descripcion: `${es_refinanciacion_de?'Refinanció':'Creó'} ${tipo}: $${capitalFinanciar.toLocaleString()} — cliente ${cliente_id}`,
+      descripcion: (es_refinanciacion_de ? 'Refinancio' : 'Creo') + ' ' + tipo + ': $' + capitalFinanciar.toLocaleString() + ' — cliente ' + cliente_id,
       detalle: { id, tipo, monto: capitalFinanciar, cliente_id, es_refinanciacion_de } })
 
     return NextResponse.json({ producto: prod.rows[0], cuotas_generadas: cuotas.length }, { status: 201 })

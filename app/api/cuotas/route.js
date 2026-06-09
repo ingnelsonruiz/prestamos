@@ -6,7 +6,7 @@ const S = 'administrativo'
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url)
-    const estado     = searchParams.get('estado') || 'pendiente'
+    const estado     = searchParams.get('estado') || 'pendiente'  // 'todas' → sin filtro
     const clienteId  = searchParams.get('cliente_id')
     const productoId = searchParams.get('producto_id')
     const hoy        = new Date().toISOString().split('T')[0]
@@ -17,9 +17,14 @@ export async function GET(request) {
              c.telefono  AS telefono_cliente,
              p.tipo      AS tipo_producto,
              p.descripcion_bien,
-             p.fecha_creacion AS fecha_prestamo,
-             p.monto_capital  AS capital_producto,
-             p.referencia     AS referencia_producto,
+             p.fecha_creacion   AS fecha_prestamo,
+             p.monto_capital    AS capital_producto,
+             p.referencia       AS referencia_producto,
+             p.tasa_interes     AS tasa_interes_producto,
+             p.periodo_tasa     AS periodo_tasa_producto,
+             p.frecuencia_cobro AS frecuencia_cobro_producto,
+             p.num_cuotas       AS num_cuotas_producto,
+             p.metodo_calculo   AS metodo_calculo_producto,
              GREATEST(0, CURRENT_DATE - cu.fecha_vencimiento) AS dias_mora
       FROM ${S}.cred_cuotas cu
       JOIN ${S}.cred_clientes  c ON c.id = cu.cliente_id
@@ -28,7 +33,9 @@ export async function GET(request) {
     `
     const values = []
 
-    if (estado === 'mora') {
+    if (estado === 'todas') {
+      // Sin filtro de estado — devuelve pagadas + parciales + pendientes
+    } else if (estado === 'mora') {
       sql += ` AND cu.fecha_vencimiento < $${values.length+1} AND cu.monto_pagado < cu.monto_cuota AND cu.estado != 'pagada'`
       values.push(hoy)
     } else {
