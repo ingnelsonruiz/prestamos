@@ -255,7 +255,25 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
     const productoId    = modal.producto_id
     setRecibo(data.numero_recibo)
     setModal(null)
-    cargar()
+
+    // Recarga solo el grupo afectado — no toda la lista
+    const [pend, parc] = await Promise.all([
+      fetch(`/api/cuotas?estado=pendiente&producto_id=${productoId}`).then(r=>r.json()).then(d=>Array.isArray(d)?d:[]),
+      fetch(`/api/cuotas?estado=parcial&producto_id=${productoId}`).then(r=>r.json()).then(d=>Array.isArray(d)?d:[]),
+    ])
+    const cuotasActivas = [...pend, ...parc].sort((a,b) =>
+      new Date(a.fecha_vencimiento) - new Date(b.fecha_vencimiento)
+    )
+    setGrupos(prev => {
+      if (cuotasActivas.length === 0) {
+        // Crédito saldado → quitar el grupo de la lista
+        return prev.filter(g => g.producto_id !== productoId)
+      }
+      // Actualizar solo las cuotas de este grupo
+      return prev.map(g => g.producto_id !== productoId ? g : { ...g, cuotas: cuotasActivas })
+    })
+    // Forzar re-fetch del historial de este producto al próximo toggle
+    setHistorialPagos(h => { const n = { ...h }; delete n[productoId]; return n })
     if (data.requiere_refinanciacion && data.capital_pendiente > 0) {
       setAlertaRefinanciar({ productoId, capitalPendiente: data.capital_pendiente, nombreCliente })
     }
