@@ -8,33 +8,37 @@ const S = 'administrativo'
 const CUOTAS_POR_MES = { diario: 30, semanal: 4, quincenal: 2, mensual: 1, anual: 1 / 12 }
 
 async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
-  const prodRes = await query(
-    `SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
-     FROM ${S}.cred_productos WHERE id = $1`, [productoId]
-  )
+  // Paralelo: las 4 queries iniciales al mismo tiempo
+  const [prodRes, capRes, pendRes, totalCuotasRes] = await Promise.all([
+    query(
+      `SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
+       FROM ${S}.cred_productos WHERE id = $1`, [productoId]
+    ),
+    query(
+      `SELECT COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
+       FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
+    ),
+    query(
+      `SELECT id, numero_cuota, monto_pagado, abono_interes, abono_capital, monto_cuota
+       FROM ${S}.cred_cuotas
+       WHERE producto_id = $1 AND estado != 'pagada'
+       ORDER BY numero_cuota ASC`, [productoId]
+    ),
+    query(
+      `SELECT COUNT(*) AS total FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
+    ),
+  ])
+
   const prod = prodRes.rows[0]
   if (!prod || prod.metodo_calculo !== 'plano') return
 
-  const capRes = await query(
-    `SELECT COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
-     FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
-  )
   const capitalPagado = parseFloat(capRes.rows[0].capital_pagado)
   const saldoCapital  = Math.round(parseFloat(prod.monto_capital) - capitalPagado)
   if (saldoCapital <= 0) return
 
-  const pendRes = await query(
-    `SELECT id, numero_cuota, monto_pagado, abono_interes, abono_capital, monto_cuota
-     FROM ${S}.cred_cuotas
-     WHERE producto_id = $1 AND estado != 'pagada'
-     ORDER BY numero_cuota ASC`, [productoId]
-  )
   let pending = pendRes.rows
   if (!pending.length) return
 
-  const totalCuotasRes = await query(
-    `SELECT COUNT(*) AS total FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
-  )
   const numCuotasTotal = parseInt(totalCuotasRes.rows[0].total)
 
   const cpmO    = CUOTAS_POR_MES[prod.periodo_tasa]    || 1
@@ -97,21 +101,27 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
     const toMark = [...toMarkOverpaid, ...toMarkInterest]
     if (toMark.length === 0) break
 
-    for (const c of toMark) {
+    // Batch UPDATE: cerrar todas las cuotas marcadas en una sola query
+    const ph = toMark.map((_, i) => `($${i*3+1}::numeric, $${i*3+2}::numeric, $${i*3+3}::text)`).join(',')
+    const pm = toMark.flatMap(c => {
       const mpagado = parseFloat(c.monto_pagado || 0)
       const aCap    = Math.max(0, mpagado - parseFloat(c.abono_interes || 0))
-      await query(
-        `UPDATE ${S}.cred_cuotas
-         SET monto_cuota=$1, abono_capital=$2, saldo_pendiente=0, estado='pagada'
-         WHERE id=$3`,
-        [mpagado, aCap, c.id]
-      )
-    }
+      return [mpagado, aCap, c.id]
+    })
+    await query(
+      `UPDATE ${S}.cred_cuotas AS cu
+       SET monto_cuota = v.monto_cuota, abono_capital = v.abono_capital,
+           saldo_pendiente = 0, estado = 'pagada'
+       FROM (VALUES ${ph}) AS v(monto_cuota, abono_capital, id)
+       WHERE cu.id = v.id`,
+      pm
+    )
     pending = pending.filter(c => !toMark.some(m => m.id === c.id))
   }
 
-  // Actualizar cuotas pendientes con valores recalculados
+  // Calcular todos los valores en memoria, luego un solo batch UPDATE
   let saldoAcum = saldoCapital
+  const batchPend = []
   for (let i = 0; i < pending.length; i++) {
     const c      = pending[i]
     const isLast = i === pending.length - 1
@@ -122,12 +132,25 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
     const yaPagado  = parseFloat(c.monto_pagado || 0)
     const saldoPend = Math.max(0, newMonto - yaPagado)
     const nuevoEst  = saldoPend <= 0 ? 'pagada' : yaPagado > 0 ? 'parcial' : 'pendiente'
+    batchPend.push({ id: c.id, newCap, newInt, newMonto, saldo: Math.max(0, saldoAcum), estado: nuevoEst })
+  }
+
+  if (batchPend.length > 0) {
+    const ph2 = batchPend.map((_, i) => {
+      const b = i * 6
+      return `($${b+1}::numeric,$${b+2}::numeric,$${b+3}::numeric,$${b+4}::numeric,$${b+5}::text,$${b+6}::text)`
+    }).join(',')
+    const pm2 = batchPend.flatMap(r => [r.newCap, r.newInt, r.newMonto, r.saldo, r.estado, r.id])
     await query(
-      `UPDATE ${S}.cred_cuotas
-       SET abono_capital=$1, abono_interes=$2, monto_cuota=$3,
-           saldo_pendiente=$4, estado=$5
-       WHERE id=$6`,
-      [newCap, newInt, newMonto, Math.max(0, saldoAcum), nuevoEst, c.id]
+      `UPDATE ${S}.cred_cuotas AS cu
+       SET abono_capital    = v.abono_capital,
+           abono_interes    = v.abono_interes,
+           monto_cuota      = v.monto_cuota,
+           saldo_pendiente  = v.saldo_pendiente,
+           estado           = v.estado
+       FROM (VALUES ${ph2}) AS v(abono_capital, abono_interes, monto_cuota, saldo_pendiente, estado, id)
+       WHERE cu.id = v.id`,
+      pm2
     )
   }
 
@@ -329,11 +352,12 @@ export async function POST(request) {
       }
     }
 
-    await auditar({
+    // Auditoría fire-and-forget — no retrasa la respuesta al cliente
+    auditar({
       ...u, accion: ACCIONES.REGISTRAR_PAGO, modulo: MODULOS.COBROS,
       descripcion: 'Pago ' + numeroRecibo + ': $' + montoNum.toLocaleString('es-CO') + ' — ' + cuotasDesc + ' (' + cuotasAplicadas.length + ' cuota' + (cuotasAplicadas.length > 1 ? 's' : '') + ')',
       detalle: { pagoId, cuota_id, monto: montoNum, monto_interes: interesAbonado, monto_capital: capitalAbonadoRnd, metodo_pago, numero_recibo: numeroRecibo, cuotas_aplicadas: cuotasAplicadas }
-    })
+    }).catch(err => console.error('[auditoría pago]', err.message))
 
     return NextResponse.json({
       ok: true,
