@@ -187,6 +187,18 @@ function NuevoPrestamoContenido() {
     setForm(f => ({...f, fecha_primer_pago: d.toISOString().split('T')[0]}))
   }, [])
 
+  // Ajustar fecha según tipo: cuenta abierta → hoy, préstamo normal → hoy+1 mes
+  useEffect(() => {
+    if (!tipoActual) return
+    const hoy = new Date().toISOString().split('T')[0]
+    if (esCuentaAbierta) {
+      setForm(f => ({ ...f, fecha_primer_pago: hoy }))
+    } else {
+      const d = new Date(); d.setMonth(d.getMonth() + 1)
+      setForm(f => ({ ...f, fecha_primer_pago: d.toISOString().split('T')[0] }))
+    }
+  }, [esCuentaAbierta, tipoActual?.codigo])
+
   // Calcular tabla de amortización en tiempo real (solo para no cuenta_abierta)
   const calcular = useCallback(() => {
     if (esCuentaAbierta) { setCuotas([]); return }
@@ -337,7 +349,7 @@ function NuevoPrestamoContenido() {
                   {tipoActual?.icono} <strong>{tipoActual?.label}</strong> — cuenta abierta sin cuotas fijas ni interés.
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Fecha *</label>
+                  <label className="text-xs font-medium text-gray-600">Fecha de apertura *</label>
                   <input type="date" max={new Date().toISOString().split('T')[0]}
                     className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                     value={form.fecha_primer_pago} onChange={e=>set('fecha_primer_pago',e.target.value)} />
