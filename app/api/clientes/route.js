@@ -41,13 +41,16 @@ export async function POST(request) {
       return NextResponse.json({ error: 'documento y nombre son obligatorios' }, { status: 400 })
 
     const id = uuidv4()
-    const result = await query(
-      `INSERT INTO ${S}.cred_clientes (id,documento,nombre,telefono,direccion,email)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [id, documento, nombre, telefono||null, direccion||null, email||null]
-    )
-    const u = await getUsuarioDesdeRequest(request)
-    await auditar({ ...u, accion: ACCIONES.CREAR_CLIENTE, modulo: MODULOS.CLIENTES,
+    const [result, u] = await Promise.all([
+      query(
+        `INSERT INTO ${S}.cred_clientes (id,documento,nombre,telefono,direccion,email)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [id, documento, nombre, telefono||null, direccion||null, email||null]
+      ),
+      getUsuarioDesdeRequest(request),
+    ])
+    // Auditoría fire-and-forget — no bloquea la respuesta
+    auditar({ ...u, accion: ACCIONES.CREAR_CLIENTE, modulo: MODULOS.CLIENTES,
       descripcion: `Nuevo cliente: ${nombre} (${documento})`,
       detalle: { id, documento, nombre } })
 

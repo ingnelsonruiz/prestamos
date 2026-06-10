@@ -38,9 +38,15 @@ export default function ClientesPage() {
     const data = await res.json()
     setLoading(false)
     if (!res.ok) { setError(data.error); return }
+    // Insertar el nuevo cliente directamente al estado — evita recargar toda la lista
+    setClientes(prev => [...prev, {
+      ...data,
+      productos_activos: 0,
+      cuotas_en_mora:    0,
+      estado_calculado:  'sin_prestamos',
+    }].sort((a, b) => a.nombre.localeCompare(b.nombre)))
     setModal(false)
     setForm({ documento:'', nombre:'', telefono:'', direccion:'', email:'' })
-    cargar()
   }
 
   return (
