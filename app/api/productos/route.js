@@ -38,7 +38,10 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
-    const body = await request.json()
+    const [body, u] = await Promise.all([
+      request.json(),
+      getUsuarioDesdeRequest(request),
+    ])
     const {
       cliente_id, tipo, monto_capital, tasa_interes, periodo_tasa,
       frecuencia_cobro, num_cuotas, fecha_primer_pago, con_interes,
@@ -53,37 +56,51 @@ export async function POST(request) {
     const confRef = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='credito_consecutivo'`)
     const numRef  = parseInt(confRef.rows[0]?.valor || '1')
     const referencia = 'CRED-' + String(numRef).padStart(6, '0')
-    await query(
+
+    // Incrementar consecutivo sin esperar — no bloquea el flujo principal
+    query(
       `UPDATE ${S}.cred_configuracion SET valor=$1 WHERE clave='credito_consecutivo'`,
       [String(numRef + 1)]
-    )
+    ).catch(err => console.error('[consecutivo]', err.message))
 
     if (tipo === 'fiado' || tipo === 'adelanto') {
       const id = uuidv4()
-      const prod = await query(
-        `INSERT INTO ${S}.cred_productos
-          (id,referencia,cliente_id,tipo,monto_capital,tasa_interes,num_cuotas,
-           fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas)
-         VALUES ($1,$2,$3,$4,$5,0,1,$6,false,'plano',$7,$8) RETURNING *`,
-        [id, referencia, cliente_id, tipo, parseFloat(monto_capital),
-         fecha_primer_pago || new Date().toISOString().split('T')[0],
-         descripcion_bien||null, notas||null]
-      )
       const cuotaId = uuidv4()
+      const capital = parseFloat(monto_capital)
+      const fechaUso = fecha_primer_pago || new Date().toISOString().split('T')[0]
+
+      const [prod] = await Promise.all([
+        query(
+          `INSERT INTO ${S}.cred_productos
+            (id,referencia,cliente_id,tipo,monto_capital,tasa_interes,num_cuotas,
+             fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas)
+           VALUES ($1,$2,$3,$4,$5,0,1,$6,false,'plano',$7,$8) RETURNING *`,
+          [id, referencia, cliente_id, tipo, capital, fechaUso, descripcion_bien||null, notas||null]
+        ),
+        // La cuota se puede insertar en paralelo si el FK lo permite; aquí la dejamos
+        // secuencial por seguridad de FK, pero la auditoría va en paralelo con la cuota
+      ])
       await query(
         `INSERT INTO ${S}.cred_cuotas
           (id,producto_id,cliente_id,numero_cuota,fecha_vencimiento,
            monto_cuota,abono_interes,abono_capital,saldo_pendiente,monto_pagado,estado)
          VALUES ($1,$2,$3,1,'2099-12-31',$4,0,$4,$4,0,'pendiente')`,
-        [cuotaId, id, cliente_id, parseFloat(monto_capital)]
+        [cuotaId, id, cliente_id, capital]
       )
+      // Auditoría fire-and-forget
+      auditar({ ...u, accion: ACCIONES.CREAR_PRESTAMO, modulo: MODULOS.PRESTAMOS,
+        descripcion: `Creo ${tipo}: $${capital.toLocaleString()} — cliente ${cliente_id}`,
+        detalle: { id, tipo, monto: capital, cliente_id } })
+        .catch(err => console.error('[auditoría]', err.message))
+
       return NextResponse.json({ producto: prod.rows[0], cuotas_generadas: 1 }, { status: 201 })
     }
 
     const id = uuidv4()
     const capitalFinanciar = parseFloat(monto_capital) - parseFloat(cuota_inicial || 0)
 
-    const prod = await query(
+    // Insertar producto y (si aplica) marcar refinanciación anterior — en paralelo
+    const insertProducto = query(
       `INSERT INTO ${S}.cred_productos (
         id,referencia,cliente_id,tipo,monto_capital,tasa_interes,periodo_tasa,
         frecuencia_cobro,num_cuotas,fecha_primer_pago,con_interes,
@@ -99,12 +116,14 @@ export async function POST(request) {
        es_refinanciacion_de||null]
     )
 
+    const promesas = [insertProducto]
     if (es_refinanciacion_de) {
-      await query(
+      promesas.push(query(
         `UPDATE ${S}.cred_productos SET estado='refinanciado', refinanciado_por=$1 WHERE id=$2`,
         [id, es_refinanciacion_de]
-      )
+      ))
     }
+    const [prod] = await Promise.all(promesas)
 
     const prod0 = { ...prod.rows[0], cliente_id }
     if (prod0.fecha_primer_pago instanceof Date) {
@@ -118,49 +137,66 @@ export async function POST(request) {
     if (cuotas.length > 0) {
       const vals = cuotas.map((_,i) => {
         const b = i*11
-        return '($' + (b+1) + ',$' + (b+2) + ',$' + (b+3) + ',$' + (b+4) + ',$' + (b+5) + ',$' + (b+6) + ',$' + (b+7) + ',$' + (b+8) + ',$' + (b+9) + ',$' + (b+10) + ',$' + (b+11) + ')'
+        return '($'+(b+1)+',$'+(b+2)+',$'+(b+3)+',$'+(b+4)+',$'+(b+5)+',$'+(b+6)+',$'+(b+7)+',$'+(b+8)+',$'+(b+9)+',$'+(b+10)+',$'+(b+11)+')'
       }).join(',')
       const params = cuotas.flatMap(c => [
         c.id,c.producto_id,c.cliente_id,c.numero_cuota,
         c.fecha_vencimiento,c.monto_cuota,c.abono_interes,
         c.abono_capital,c.saldo_pendiente,c.monto_pagado,c.estado
       ])
-      await query(
-        `INSERT INTO ${S}.cred_cuotas
-         (id,producto_id,cliente_id,numero_cuota,fecha_vencimiento,monto_cuota,
-          abono_interes,abono_capital,saldo_pendiente,monto_pagado,estado)
-         VALUES ${vals}`, params
-      )
 
+      // Insertar cuotas y consultar saldo de caja — en paralelo
+      const [, saldoRes] = await Promise.all([
+        query(
+          `INSERT INTO ${S}.cred_cuotas
+           (id,producto_id,cliente_id,numero_cuota,fecha_vencimiento,monto_cuota,
+            abono_interes,abono_capital,saldo_pendiente,monto_pagado,estado)
+           VALUES ${vals}`, params
+        ),
+        query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`),
+      ])
+
+      const saldoAnt    = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
       const interesTotal = cuotas.reduce((s, c) => s + (c.abono_interes || 0), 0)
       const totalAPagar  = cuotas.reduce((s, c) => s + (c.monto_cuota  || 0), 0)
       const montoPrimera = cuotas[0]?.monto_cuota || 0
+
+      // Insertar caja e historial en paralelo; auditoría fire-and-forget
+      await Promise.all([
+        query(
+          `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
+           VALUES ($1,'desembolso',$2,$3,$4,$5)`,
+          [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id, saldoAnt - capitalFinanciar]
+        ),
+        query(
+          `INSERT INTO ${S}.cred_historial_recalculos
+             (id, producto_id, tipo, capital_original,
+              capital_saldo_antes, capital_saldo_despues, capital_abonado,
+              interes_pendiente_antes, interes_pendiente_despues,
+              num_cuotas_total, num_cuotas_antes, num_cuotas_despues,
+              monto_cuota_antes, monto_cuota_despues,
+              total_pendiente_antes, total_pendiente_despues)
+           VALUES ($1,$2,'creacion',$3,$3,$3,0,$4,$4,$5,$5,$5,$6,$6,$7,$7)`,
+          [uuidv4(), id, capitalFinanciar, interesTotal, cuotas.length, montoPrimera, totalAPagar]
+        ),
+      ])
+    } else {
+      // Sin cuotas (edge case): solo mover caja
+      const saldoRes = await query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`)
+      const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
       await query(
-        `INSERT INTO ${S}.cred_historial_recalculos
-           (id, producto_id, tipo, capital_original,
-            capital_saldo_antes, capital_saldo_despues, capital_abonado,
-            interes_pendiente_antes, interes_pendiente_despues,
-            num_cuotas_total, num_cuotas_antes, num_cuotas_despues,
-            monto_cuota_antes, monto_cuota_despues,
-            total_pendiente_antes, total_pendiente_despues)
-         VALUES ($1,$2,'creacion',$3,$3,$3,0,$4,$4,$5,$5,$5,$6,$6,$7,$7)`,
-        [uuidv4(), id, capitalFinanciar, interesTotal, cuotas.length, montoPrimera, totalAPagar]
+        `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
+         VALUES ($1,'desembolso',$2,$3,$4,$5)`,
+        [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id, saldoAnt - capitalFinanciar]
       )
     }
 
-    const saldoRes = await query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`)
-    const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
-    await query(
-      `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-       VALUES ($1,'desembolso',$2,$3,$4,$5)`,
-      [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id, saldoAnt - capitalFinanciar]
-    )
-
-    const u = await getUsuarioDesdeRequest(request)
+    // Auditoría fire-and-forget — no retrasa la respuesta al cliente
     const accion = es_refinanciacion_de ? ACCIONES.REFINANCIAR : ACCIONES.CREAR_PRESTAMO
-    await auditar({ ...u, accion, modulo: MODULOS.PRESTAMOS,
+    auditar({ ...u, accion, modulo: MODULOS.PRESTAMOS,
       descripcion: (es_refinanciacion_de ? 'Refinancio' : 'Creo') + ' ' + tipo + ': $' + capitalFinanciar.toLocaleString() + ' — cliente ' + cliente_id,
       detalle: { id, tipo, monto: capitalFinanciar, cliente_id, es_refinanciacion_de } })
+      .catch(err => console.error('[auditoría]', err.message))
 
     return NextResponse.json({ producto: prod.rows[0], cuotas_generadas: cuotas.length }, { status: 201 })
   } catch (error) {
