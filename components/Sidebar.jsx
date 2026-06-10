@@ -80,6 +80,12 @@ export default function Sidebar({ onClose }) {
               <span>📋</span>
               Auditoría
             </Link>
+            <Link href="/backup"
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-base font-medium transition-colors
+                ${pathname.startsWith('/backup') ? 'bg-blue-700 text-white' : 'text-blue-100 hover:bg-blue-800 hover:text-white'}`}>
+              <span>🛡️</span>
+              Copia de seguridad
+            </Link>
           </>
         )}
       </nav>

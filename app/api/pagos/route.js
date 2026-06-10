@@ -366,7 +366,7 @@ export async function GET(request) {
     if (productoId) { sql += ` AND pg.producto_id=$${values.length+1}`; values.push(productoId) }
     if (clienteId)  { sql += ` AND pg.cliente_id=$${values.length+1}`;  values.push(clienteId) }
     if (fecha)      { sql += ` AND pg.fecha_pago::date=$${values.length+1}`; values.push(fecha) }
-    sql += ` ORDER BY pg.fecha_pago DESC`
+    sql += ` ORDER BY cu.numero_cuota ASC, pg.numero_recibo ASC`
 
     const result = await query(sql, values)
     return NextResponse.json(result.rows)

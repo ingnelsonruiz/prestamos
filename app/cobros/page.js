@@ -640,8 +640,11 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                         : cuotasTodas.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0))
                       : 0
 
-                    // Pagos de primero a último (ya vienen ordenados ASC del API)
-                    const pagosOrdenados = pagos
+                    // Ordenar de primero a último: cuota #1 → #N
+                    const pagosOrdenados = [...pagos].sort((a, b) =>
+                      parseInt(a.numero_cuota) - parseInt(b.numero_cuota) ||
+                      (a.numero_recibo || '').localeCompare(b.numero_recibo || '')
+                    )
 
                     return (
                       <div className="border-t bg-slate-50">

@@ -31,7 +31,7 @@ export async function GET(request) {
          JOIN ${S}.cred_cuotas  cu ON cu.id = pg.cuota_id
          JOIN ${S}.cred_clientes c  ON c.id = pg.cliente_id
          WHERE pg.producto_id = $1
-         ORDER BY pg.numero_recibo ASC`,
+         ORDER BY cu.numero_cuota ASC, pg.numero_recibo ASC`,
         [productoId]
       ),
       query(
