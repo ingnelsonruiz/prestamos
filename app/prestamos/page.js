@@ -161,13 +161,13 @@ function PrestamosContent() {
                           {p.refinanciado_por && (
                             <Link href={`/prestamos/${p.refinanciado_por}`}
                               className="flex items-center gap-1 text-xs font-semibold text-purple-600 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-full w-fit hover:bg-purple-100">
-                              🔄 Refinanciado → ver nuevo
+                              🔄 Refinanciado → {p.ref_nuevo || 'ver nuevo'}
                             </Link>
                           )}
                           {p.es_refinanciacion_de && (
                             <Link href={`/prestamos/${p.es_refinanciacion_de}`}
                               className="flex items-center gap-1 text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full w-fit hover:bg-blue-100">
-                              🔗 Refinanciación ← ver original
+                              🔗 Refinanciación de {p.ref_origen || 'ver original'}
                             </Link>
                           )}
                         </div>

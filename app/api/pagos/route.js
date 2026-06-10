@@ -277,6 +277,36 @@ export async function POST(request) {
     if (!sinPendientes.rows.length)
       await query(`UPDATE ${S}.cred_productos SET estado='saldado' WHERE id=$1`, [cuotaRef.producto_id])
 
+    // Detectar si se pagaron intereses de la ÚLTIMA cuota pero queda capital pendiente
+    // → solo aplica cuando la cuota que se acaba de pagar ES la última del crédito
+    // → NO debe dispararse al pagar cuotas intermedias aunque la última siga pendiente
+    let requiereRefinanciacion = false
+    let capitalPendiente = 0
+    if (sinPendientes.rows.length > 0) {
+      const maxRes = await query(
+        `SELECT MAX(numero_cuota) AS max_total FROM ${S}.cred_cuotas WHERE producto_id = $1`,
+        [cuotaRef.producto_id]
+      )
+      const { max_total } = maxRes.rows[0]
+      // La cuota procesada debe SER la última del crédito (no solo que la última esté pendiente)
+      const cuotaEsUltima = max_total !== null &&
+        parseInt(cuotaRef.numero_cuota) === parseInt(max_total)
+      if (cuotaEsUltima) {
+        const capRes = await query(
+          `SELECT p.monto_capital::numeric
+                  - COALESCE(SUM(GREATEST(0, cu.monto_pagado::numeric - cu.abono_interes::numeric)), 0)
+                  AS capital_pendiente
+           FROM ${S}.cred_productos p
+           LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
+           WHERE p.id = $1
+           GROUP BY p.monto_capital`,
+          [cuotaRef.producto_id]
+        )
+        capitalPendiente = Math.round(parseFloat(capRes.rows[0]?.capital_pendiente || 0))
+        requiereRefinanciacion = capitalPendiente > 1
+      }
+    }
+
     await auditar({
       ...u, accion: ACCIONES.REGISTRAR_PAGO, modulo: MODULOS.COBROS,
       descripcion: 'Pago ' + numeroRecibo + ': $' + montoNum.toLocaleString('es-CO') + ' — ' + cuotasDesc + ' (' + cuotasAplicadas.length + ' cuota' + (cuotasAplicadas.length > 1 ? 's' : '') + ')',
@@ -285,9 +315,11 @@ export async function POST(request) {
 
     return NextResponse.json({
       ok: true,
-      numero_recibo:    numeroRecibo,
-      cuotas_aplicadas: cuotasAplicadas.length,
-      estado_cuota:     cuotasAplicadas[0]?.estado,
+      numero_recibo:           numeroRecibo,
+      cuotas_aplicadas:        cuotasAplicadas.length,
+      estado_cuota:            cuotasAplicadas[0]?.estado,
+      requiere_refinanciacion: requiereRefinanciacion,
+      capital_pendiente:       capitalPendiente,
     })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })

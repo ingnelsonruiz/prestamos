@@ -16,14 +16,18 @@ export async function GET(request) {
              COUNT(cu.id) AS total_cuotas,
              COUNT(cu.id) FILTER (WHERE cu.estado IN ('pendiente','parcial','mora')) AS cuotas_pendientes,
              COUNT(cu.id) FILTER (WHERE cu.estado = 'mora') AS cuotas_mora,
-             COALESCE(SUM(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado != 'pagada'),0) AS capital_pendiente
+             COALESCE(SUM(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado != 'pagada'),0) AS capital_pendiente,
+             por.referencia  AS ref_nuevo,
+             orig.referencia AS ref_origen
       FROM ${S}.cred_productos p
       JOIN ${S}.cred_clientes c ON c.id = p.cliente_id
       LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
+      LEFT JOIN ${S}.cred_productos por  ON por.id  = p.refinanciado_por
+      LEFT JOIN ${S}.cred_productos orig ON orig.id = p.es_refinanciacion_de
     `
     const values = []
     if (clienteId) { sql += ` WHERE p.cliente_id=$1`; values.push(clienteId) }
-    sql += ` GROUP BY p.id, c.nombre, c.documento, c.telefono, c.direccion ORDER BY p.fecha_creacion DESC`
+    sql += ` GROUP BY p.id, c.nombre, c.documento, c.telefono, c.direccion, por.referencia, orig.referencia ORDER BY p.fecha_creacion DESC`
 
     const result = await query(sql, values)
     return NextResponse.json(result.rows)

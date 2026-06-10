@@ -27,6 +27,7 @@ export default function CobrosPage() {
   const [arqueo, setArqueo]         = useState(null)
   const [loadingArqueo, setLoadingArqueo] = useState(false)
   const [historialPagos, setHistorialPagos] = useState({})  // keyed by producto_id
+  const [alertaRefinanciar, setAlertaRefinanciar] = useState(null) // { productoId, capitalPendiente, nombreCliente }
 
   // Fecha local sin desfase UTC
   const hoy = (() => {
@@ -250,9 +251,14 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
     const data = await res.json()
     setLoading(false)
     if (!res.ok) { setError(data.error); return }
+    const nombreCliente = modal.nombre_cliente
+    const productoId    = modal.producto_id
     setRecibo(data.numero_recibo)
     setModal(null)
     cargar()
+    if (data.requiere_refinanciacion && data.capital_pendiente > 0) {
+      setAlertaRefinanciar({ productoId, capitalPendiente: data.capital_pendiente, nombreCliente })
+    }
   }
 
   return (
@@ -1001,6 +1007,27 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
               </div>
             )}
 
+            {/* ── Advertencia: última cuota con capital pendiente ── */}
+            {(() => {
+              const grupo    = grupos.find(g => g.producto_id === modal.producto_id)
+              const esUltima = grupo?.cuotas.length === 1 && parseFloat(modal.abono_capital || 0) > 0
+              if (!esUltima) return null
+              return tipoPago === 'solo_interes' ? (
+                <div className="bg-amber-50 border border-amber-400 rounded-lg p-3 text-xs">
+                  <p className="font-bold text-amber-800 mb-1">⚠️ Última cuota — capital pendiente</p>
+                  <p className="text-amber-700">
+                    Al pagar solo intereses quedarán <strong className="text-red-600">{fmt(capitalPend(modal))}</strong> de capital sin cobrar.
+                    El sistema te pedirá <strong>refinanciar el crédito</strong> para evitar que quede abierto indefinidamente.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-green-50 border border-green-300 rounded-lg p-3 text-xs">
+                  <p className="font-bold text-green-800 mb-1">✅ Última cuota del crédito</p>
+                  <p className="text-green-700">Al pagar la cuota completa el crédito quedará <strong>saldado</strong>.</p>
+                </div>
+              )
+            })()}
+
             {error && <p className="text-red-500 text-sm">{error}</p>}
 
             <div>
@@ -1178,6 +1205,41 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                 ⚠️ Este cliente no tiene teléfono registrado. Copia el mensaje manualmente.
               </p>
             )}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── Modal: crédito requiere refinanciación ── */}
+    {alertaRefinanciar && (
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+          <div className="bg-amber-500 px-6 py-4 text-white text-center">
+            <p className="text-3xl mb-1">⚠️</p>
+            <p className="text-lg font-bold">Crédito requiere refinanciación</p>
+          </div>
+          <div className="px-6 py-5 space-y-3 text-sm">
+            <p className="text-gray-700 text-center">
+              <strong>{alertaRefinanciar.nombreCliente}</strong> pagó solo los intereses de la última cuota.
+            </p>
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-center">
+              <p className="text-xs text-gray-500 mb-1">Capital pendiente sin cobrar</p>
+              <p className="text-2xl font-black text-red-600">{fmt(alertaRefinanciar.capitalPendiente)}</p>
+            </div>
+            <p className="text-gray-500 text-xs text-center">
+              Si no se refinancia, el crédito quedará abierto indefinidamente y afectará los informes y la cartera.
+            </p>
+          </div>
+          <div className="px-6 pb-6 flex gap-3">
+            <button onClick={() => setAlertaRefinanciar(null)}
+              className="flex-1 border rounded-xl py-3 text-sm text-gray-600 hover:bg-gray-50">
+              Hacer después
+            </button>
+            <a href={`/prestamos/${alertaRefinanciar.productoId}`}
+              onClick={() => setAlertaRefinanciar(null)}
+              className="flex-1 bg-purple-600 text-white rounded-xl py-3 text-sm font-bold text-center hover:bg-purple-700">
+              🔄 Refinanciar ahora
+            </a>
           </div>
         </div>
       </div>
