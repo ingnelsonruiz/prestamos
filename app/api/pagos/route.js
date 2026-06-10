@@ -179,19 +179,24 @@ export async function POST(request) {
 
     const cuotaRef = cuotaRes.rows[0]
 
-    const modoPruebaRes = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`)
-    const modoPrueba    = modoPruebaRes.rows[0]?.valor === 'true'
+    // ── Paralelo 1: 3 queries independientes al mismo tiempo ─────────────
+    const [modoPruebaRes, pendientesRes, confRes, u] = await Promise.all([
+      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`),
+      query(
+        `SELECT * FROM ${S}.cred_cuotas
+         WHERE producto_id = $1 AND estado != 'pagada'
+         ORDER BY numero_cuota ASC`,
+        [cuotaRef.producto_id]
+      ),
+      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='recibo_consecutivo'`),
+      getUsuarioDesdeRequest(request),
+    ])
+
+    const modoPrueba = modoPruebaRes.rows[0]?.valor === 'true'
     if (!modoPrueba && fecha_pago && fecha_pago > new Date().toISOString().split('T')[0])
       return NextResponse.json({ error: 'La fecha del pago no puede ser mayor a la fecha actual' }, { status: 400 })
 
-    const pendientesRes = await query(
-      `SELECT * FROM ${S}.cred_cuotas
-       WHERE producto_id = $1 AND estado != 'pagada'
-       ORDER BY numero_cuota ASC`,
-      [cuotaRef.producto_id]
-    )
     const cuotasPendientes = pendientesRes.rows
-
     const totalPendiente = cuotasPendientes.reduce(
       (s, c) => s + parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0), 0
     )
@@ -204,13 +209,14 @@ export async function POST(request) {
       }, { status: 400 })
     }
 
-    const confRes      = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='recibo_consecutivo'`)
     const consecutivo  = parseInt(confRes.rows[0]?.valor || '1')
     const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
 
+    // ── Calcular distribución del pago (sin queries) ──────────────────────
     let restante = montoNum
     let capitalAbonado = 0
     const cuotasAplicadas = []
+    const batchUpdates = []   // acumular para un solo UPDATE en batch
 
     for (const c of cuotasPendientes) {
       if (restante <= 0) break
@@ -222,46 +228,62 @@ export async function POST(request) {
       const interesEnAplicacion = Math.min(aplicar, interesPendiente)
       capitalAbonado += Math.max(0, aplicar - interesEnAplicacion)
       const estadoC = nuevoP >= parseFloat(c.monto_cuota) ? 'pagada' : 'parcial'
-      await query(
-        `UPDATE ${S}.cred_cuotas SET monto_pagado=$1, estado=$2, dias_mora=0 WHERE id=$3`,
-        [nuevoP, estadoC, c.id]
-      )
+      batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
       cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: aplicar, estado: estadoC })
       restante -= aplicar
     }
 
+    // ── Batch UPDATE: todas las cuotas en una sola query ──────────────────
+    if (batchUpdates.length > 0) {
+      const placeholders = batchUpdates.map((_, i) =>
+        `($${i*3+1}::numeric, $${i*3+2}::text, $${i*3+3}::text)`
+      ).join(',')
+      const params = batchUpdates.flatMap(b => [b.monto_pagado, b.estado, b.id])
+      await query(
+        `UPDATE ${S}.cred_cuotas AS cu
+         SET monto_pagado = v.monto_pagado, estado = v.estado, dias_mora = 0
+         FROM (VALUES ${placeholders}) AS v(monto_pagado, estado, id)
+         WHERE cu.id = v.id`,
+        params
+      )
+    }
+
     const interesAbonado    = Math.round(montoNum - capitalAbonado)
     const capitalAbonadoRnd = Math.round(capitalAbonado)
-
     const fechaReal  = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()
-    const u          = await getUsuarioDesdeRequest(request)
     const pagoId     = uuidv4()
     const cuotasDesc = cuotasAplicadas.length > 1
       ? 'Cuotas #' + cuotasAplicadas[0].numero + '-#' + cuotasAplicadas[cuotasAplicadas.length - 1].numero
       : 'Cuota #' + (cuotasAplicadas[0]?.numero ?? cuotaRef.numero_cuota)
 
-    await query(
-      `INSERT INTO ${S}.cred_pagos
-        (id, cuota_id, producto_id, cliente_id, monto, monto_interes, monto_capital,
-         fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [pagoId, cuota_id, cuotaRef.producto_id, cuotaRef.cliente_id,
-       montoNum, interesAbonado, capitalAbonadoRnd, fechaReal,
-       metodo_pago || 'efectivo', notas || null, numeroRecibo, u.nombre]
-    )
+    // ── Paralelo 2: INSERT pago + saldo caja + UPDATE consecutivo ─────────
+    const [, saldoRes] = await Promise.all([
+      query(
+        `INSERT INTO ${S}.cred_pagos
+          (id, cuota_id, producto_id, cliente_id, monto, monto_interes, monto_capital,
+           fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [pagoId, cuota_id, cuotaRef.producto_id, cuotaRef.cliente_id,
+         montoNum, interesAbonado, capitalAbonadoRnd, fechaReal,
+         metodo_pago || 'efectivo', notas || null, numeroRecibo, u.nombre]
+      ),
+      query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`),
+    ])
 
-    const saldoRes = await query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`)
     const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
-    await query(
-      `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-       VALUES ($1,'cobro_capital',$2,$3,$4,$5)`,
-      [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId, saldoAnt + montoNum]
-    )
 
-    await query(
-      `UPDATE ${S}.cred_configuracion SET valor=$1, actualizado_en=NOW() WHERE clave='recibo_consecutivo'`,
-      [String(consecutivo + 1)]
-    )
+    // ── Paralelo 3: INSERT caja + UPDATE consecutivo ──────────────────────
+    await Promise.all([
+      query(
+        `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
+         VALUES ($1,'cobro_capital',$2,$3,$4,$5)`,
+        [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId, saldoAnt + montoNum]
+      ),
+      query(
+        `UPDATE ${S}.cred_configuracion SET valor=$1, actualizado_en=NOW() WHERE clave='recibo_consecutivo'`,
+        [String(consecutivo + 1)]
+      ),
+    ])
 
     await recalcularCuotasPlano(cuotaRef.producto_id, {
       pagoId,
