@@ -8,7 +8,7 @@ const S = 'administrativo'
 export async function POST(request, { params }) {
   try {
     const { id } = params
-    const { monto_acordado, metodo_pago, notas, fecha_pago } = await request.json()
+    const { monto_acordado, metodo_pago, notas, fecha_pago, recoger_credito } = await request.json()
 
     if (!monto_acordado || parseFloat(monto_acordado) <= 0)
       return NextResponse.json({ error: 'El monto acordado debe ser mayor a cero' }, { status: 400 })
@@ -85,12 +85,34 @@ export async function POST(request, { params }) {
        numeroRecibo, u.nombre]
     )
 
-    // ── Marcar TODAS las cuotas pendientes como pagadas ───────────────────
-    await query(
-      `UPDATE ${S}.cred_cuotas
-       SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
-       WHERE producto_id=$1 AND estado != 'pagada'`, [id]
-    )
+    // ── Cerrar cuotas pendientes ──────────────────────────────────────────
+    if (recoger_credito) {
+      // Marcar como pagada solo la primera cuota (la que recibió el pago real)
+      await query(
+        `UPDATE ${S}.cred_cuotas
+         SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
+         WHERE id=$1`, [cuotaRef.id]
+      )
+      // Eliminar las cuotas restantes que nunca recibieron ningún pago
+      await query(
+        `DELETE FROM ${S}.cred_cuotas
+         WHERE producto_id=$1 AND estado != 'pagada' AND (monto_pagado IS NULL OR monto_pagado = 0)`,
+        [id]
+      )
+      // Las parciales (si las hay) también se cierran
+      await query(
+        `UPDATE ${S}.cred_cuotas
+         SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
+         WHERE producto_id=$1 AND estado != 'pagada'`, [id]
+      )
+    } else {
+      // Liquidación anticipada normal: marcar todas como pagadas
+      await query(
+        `UPDATE ${S}.cred_cuotas
+         SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
+         WHERE producto_id=$1 AND estado != 'pagada'`, [id]
+      )
+    }
 
     // ── Marcar producto como saldado ─────────────────────────────────────
     await query(

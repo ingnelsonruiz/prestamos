@@ -258,7 +258,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
       const notaLiq = '🏁 Recoger crédito — ' + (notas || '').trim()
       const res = await fetch(`/api/productos/${productoId}/liquidar`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ monto_acordado: montoNum, metodo_pago: metodo, notas: notaLiq.trim(), fecha_pago: fechaPago })
+        body: JSON.stringify({ monto_acordado: montoNum, metodo_pago: metodo, notas: notaLiq.trim(), fecha_pago: fechaPago, recoger_credito: true })
       })
       const data = await res.json()
       setLoading(false)
