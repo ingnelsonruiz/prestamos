@@ -13,36 +13,38 @@ export async function POST(request, { params }) {
     if (!monto_acordado || parseFloat(monto_acordado) <= 0)
       return NextResponse.json({ error: 'El monto acordado debe ser mayor a cero' }, { status: 400 })
 
-    // Verificar que el producto existe y es liquidable
-    const prodRes = await query(
-      `SELECT p.*, c.nombre AS nombre_cliente
-       FROM ${S}.cred_productos p
-       JOIN ${S}.cred_clientes c ON c.id = p.cliente_id
-       WHERE p.id = $1`, [id]
-    )
-    if (!prodRes.rows.length)
-      return NextResponse.json({ error: 'Crédito no encontrado' }, { status: 404 })
+    // ── RTT 1: producto + cuotas + usuario en paralelo ────────────────────
+    const [ctxRes, u] = await Promise.all([
+      query(
+        `SELECT
+           (SELECT row_to_json(p) FROM (
+              SELECT pr.*, c.nombre AS nombre_cliente
+              FROM ${S}.cred_productos pr
+              JOIN ${S}.cred_clientes c ON c.id = pr.cliente_id
+              WHERE pr.id = $1) p)                                         AS prod,
+           (SELECT COALESCE(json_agg(cu.* ORDER BY cu.numero_cuota), '[]'::json)
+              FROM ${S}.cred_cuotas cu
+              WHERE cu.producto_id = $1 AND cu.estado != 'pagada')        AS cuotas`,
+        [id]
+      ),
+      getUsuarioDesdeRequest(request),
+    ])
 
-    const prod = prodRes.rows[0]
+    const ctx = ctxRes.rows[0]
+    const prod = typeof ctx.prod === 'string' ? JSON.parse(ctx.prod) : ctx.prod
+    if (!prod)
+      return NextResponse.json({ error: 'Crédito no encontrado' }, { status: 404 })
     if (['saldado', 'refinanciado', 'decomisado'].includes(prod.estado))
       return NextResponse.json({ error: `El crédito ya está en estado "${prod.estado}"` }, { status: 400 })
 
-    // Cuotas pendientes
-    const cuotasRes = await query(
-      `SELECT * FROM ${S}.cred_cuotas
-       WHERE producto_id = $1 AND estado != 'pagada'
-       ORDER BY numero_cuota ASC`, [id]
-    )
-    const cuotasPendientes = cuotasRes.rows
+    const cuotasPendientes = typeof ctx.cuotas === 'string' ? JSON.parse(ctx.cuotas) : ctx.cuotas
     if (!cuotasPendientes.length)
       return NextResponse.json({ error: 'No hay cuotas pendientes — el crédito ya está saldado' }, { status: 400 })
 
-    // Calcular saldo real pendiente
+    // Calcular saldos en memoria (sin queries adicionales)
     const saldoReal = cuotasPendientes.reduce((s, c) =>
       s + parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0), 0)
 
-    // Saldo solo capital — proporcional para cuotas parciales
-    // (misma lógica que el frontend para evitar discrepancias)
     const saldoCapitalPendiente = cuotasPendientes.reduce((s, c) => {
       const montoCuota   = parseFloat(c.monto_cuota || 0)
       const montoPagado  = parseFloat(c.monto_pagado || 0)
@@ -54,7 +56,6 @@ export async function POST(request, { params }) {
 
     const montoAcordado = parseFloat(monto_acordado)
 
-    // Validación: el monto acordado no puede ser menor al capital pendiente
     if (montoAcordado < saldoCapitalPendiente) {
       return NextResponse.json({
         error: `El valor acordado (${new Intl.NumberFormat('es-CO').format(montoAcordado)}) no puede ser menor al saldo de capital pendiente (${new Intl.NumberFormat('es-CO').format(saldoCapitalPendiente)}). Puede perdonar intereses, pero no el capital prestado.`
@@ -62,96 +63,93 @@ export async function POST(request, { params }) {
     }
 
     const descuento = Math.max(0, saldoReal - montoAcordado)
-
-    // ── Generar número de recibo ──────────────────────────────────────────
-    const confRes    = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='recibo_consecutivo'`)
-    const consecutivo = parseInt(confRes.rows[0]?.valor || '1')
-    const numeroRecibo = `REC-${String(consecutivo).padStart(6, '0')}`
-
-    // ── Registrar el pago de liquidación ─────────────────────────────────
+    const cuotaRef  = cuotasPendientes[0]
     const pagoId    = uuidv4()
     const fechaReal = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()
-    const u         = await getUsuarioDesdeRequest(request)
+    const notaPago  = `LIQUIDACIÓN ANTICIPADA${notas ? ' — ' + notas : ''}${descuento > 0 ? ` | Descuento aplicado: ${new Intl.NumberFormat('es-CO').format(descuento)}` : ''}`
 
-    // Asociar el pago a la primera cuota pendiente
-    const cuotaRef = cuotasPendientes[0]
-    await query(
-      `INSERT INTO ${S}.cred_pagos
-        (id, cuota_id, producto_id, cliente_id, monto, fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [pagoId, cuotaRef.id, id, prod.cliente_id,
-       montoAcordado, fechaReal, metodo_pago || 'efectivo',
-       `LIQUIDACIÓN ANTICIPADA${notas ? ' — ' + notas : ''}${descuento > 0 ? ` | Descuento aplicado: ${new Intl.NumberFormat('es-CO').format(descuento)}` : ''}`,
-       numeroRecibo, u.nombre]
+    // ── RTT 2: consecutivo atómico — evita race condition y un round trip ─
+    const consRes = await query(
+      `UPDATE ${S}.cred_configuracion
+       SET valor = (valor::int + 1)::text, actualizado_en = NOW()
+       WHERE clave = 'recibo_consecutivo'
+       RETURNING (valor::int - 1) AS consecutivo`
     )
+    const consecutivo  = parseInt(consRes.rows[0]?.consecutivo ?? '1')
+    const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
 
-    // ── Cerrar cuotas pendientes ──────────────────────────────────────────
-    if (recoger_credito) {
-      // Marcar como pagada solo la primera cuota (la que recibió el pago real)
-      await query(
-        `UPDATE ${S}.cred_cuotas
-         SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
-         WHERE id=$1`, [cuotaRef.id]
-      )
-      // Eliminar las cuotas restantes que nunca recibieron ningún pago
-      await query(
-        `DELETE FROM ${S}.cred_cuotas
-         WHERE producto_id=$1 AND estado != 'pagada' AND (monto_pagado IS NULL OR monto_pagado = 0)`,
-        [id]
-      )
-      // Las parciales (si las hay) también se cierran
-      await query(
-        `UPDATE ${S}.cred_cuotas
-         SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
-         WHERE producto_id=$1 AND estado != 'pagada'`, [id]
-      )
-    } else {
-      // Liquidación anticipada normal: marcar todas como pagadas
-      await query(
-        `UPDATE ${S}.cred_cuotas
-         SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
-         WHERE producto_id=$1 AND estado != 'pagada'`, [id]
-      )
-    }
+    // ── RTT 3: todo en paralelo ───────────────────────────────────────────
+    // INSERT pago, cierre de cuotas, UPDATE producto y caja con subquery inline
+    const cuotasQueries = recoger_credito
+      ? [
+          // Cerrar primera cuota (la que recibió el pago)
+          query(
+            `UPDATE ${S}.cred_cuotas
+             SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
+             WHERE id=$1`, [cuotaRef.id]
+          ),
+          // Eliminar cuotas futuras sin ningún pago (excluye la primera)
+          query(
+            `DELETE FROM ${S}.cred_cuotas
+             WHERE producto_id=$1 AND id != $2
+               AND estado != 'pagada'
+               AND (monto_pagado IS NULL OR monto_pagado = 0)`,
+            [id, cuotaRef.id]
+          ),
+          // Cerrar cuotas parciales restantes (excluye la primera ya cerrada)
+          query(
+            `UPDATE ${S}.cred_cuotas
+             SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
+             WHERE producto_id=$1 AND id != $2 AND estado != 'pagada'`,
+            [id, cuotaRef.id]
+          ),
+        ]
+      : [
+          query(
+            `UPDATE ${S}.cred_cuotas
+             SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
+             WHERE producto_id=$1 AND estado != 'pagada'`, [id]
+          ),
+        ]
 
-    // ── Marcar producto como saldado ─────────────────────────────────────
-    await query(
-      `UPDATE ${S}.cred_productos SET estado='saldado' WHERE id=$1`, [id]
-    )
+    await Promise.all([
+      query(
+        `INSERT INTO ${S}.cred_pagos
+          (id, cuota_id, producto_id, cliente_id, monto, fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [pagoId, cuotaRef.id, id, prod.cliente_id,
+         montoAcordado, fechaReal, metodo_pago || 'efectivo', notaPago, numeroRecibo, u.nombre]
+      ),
+      query(`UPDATE ${S}.cred_productos SET estado='saldado' WHERE id=$1`, [id]),
+      // Saldo de caja con subquery inline — elimina SELECT previo
+      query(
+        `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
+         VALUES ($1,'cobro_capital',$2,$3,$4,
+           COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
+                     ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
+        [uuidv4(), montoAcordado,
+         `${numeroRecibo} — Liquidación anticipada ${prod.nombre_cliente}`,
+         pagoId]
+      ),
+      ...cuotasQueries,
+    ])
 
-    // ── Movimiento de caja ────────────────────────────────────────────────
-    const saldoRes = await query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`)
-    const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
-    await query(
-      `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-       VALUES ($1,'cobro_capital',$2,$3,$4,$5)`,
-      [uuidv4(), montoAcordado,
-       `${numeroRecibo} — Liquidación anticipada ${prod.nombre_cliente}`,
-       pagoId, saldoAnt + montoAcordado]
-    )
-
-    // ── Actualizar consecutivo de recibo ──────────────────────────────────
-    await query(
-      `UPDATE ${S}.cred_configuracion SET valor=$1, actualizado_en=NOW() WHERE clave='recibo_consecutivo'`,
-      [String(consecutivo + 1)]
-    )
-
-    // ── Auditoría ─────────────────────────────────────────────────────────
-    await auditar({
+    // ── Auditoría fire-and-forget — no bloquea la respuesta ───────────────
+    auditar({
       ...u,
       accion:      'Liquidación anticipada',
       modulo:      MODULOS.COBROS,
       descripcion: `Liquidó crédito de ${prod.nombre_cliente}: acordado ${new Intl.NumberFormat('es-CO').format(montoAcordado)}, saldo real ${new Intl.NumberFormat('es-CO').format(saldoReal)}, descuento ${new Intl.NumberFormat('es-CO').format(descuento)}`,
       detalle:     { productoId: id, montoAcordado, saldoReal, descuento, cuotasCerradas: cuotasPendientes.length, numeroRecibo }
-    })
+    }).catch(err => console.error('[auditoría liquidar]', err.message))
 
     return NextResponse.json({
       ok: true,
-      numero_recibo:    numeroRecibo,
-      monto_acordado:   montoAcordado,
-      saldo_real:       saldoReal,
-      descuento:        descuento,
-      cuotas_cerradas:  cuotasPendientes.length,
+      numero_recibo:   numeroRecibo,
+      monto_acordado:  montoAcordado,
+      saldo_real:      saldoReal,
+      descuento:       descuento,
+      cuotas_cerradas: cuotasPendientes.length,
     }, { status: 200 })
 
   } catch (error) {
