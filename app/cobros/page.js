@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import * as XLSX from 'xlsx'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
 
@@ -105,6 +106,18 @@ export default function CobrosPage() {
   const esMora   = c => c.fecha_vencimiento?.split('T')[0] < hoy
   const pendiente = c => parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0)
 
+  // Helpers de fechas para los tramos de la ruta de cobro
+  const fechaMas = n => {
+    const d = new Date(hoy + 'T12:00:00'); d.setDate(d.getDate() + n)
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  }
+  const manana = fechaMas(1)
+  const mas7   = fechaMas(7)
+  const mas15  = fechaMas(15)
+  const fvDe   = c => c.fecha_vencimiento?.split('T')[0]
+  const enRuta = c => { const fv = fvDe(c); return fv && fv !== '2099-12-31' }   // excluye cuentas abiertas (fiado/adelanto)
+  const diasDesde = c => Math.round((new Date(hoy+'T12:00:00') - new Date(fvDe(c)+'T12:00:00')) / 86400000)
+
   // Desglose pendiente de una cuota: el pago se aplica primero a intereses
   const interesBase    = c => parseFloat(c.abono_interes || 0)
   const capitalBase    = c => parseFloat(c.abono_capital || 0)
@@ -114,7 +127,10 @@ export default function CobrosPage() {
 
   // Devuelve solo las cuotas que son relevantes para el filtro activo
   const cuotasParaMostrar = (cuotas) => {
-    if (filtro === 'hoy')    return cuotas.filter(c => esMora(c) || c.fecha_vencimiento?.split('T')[0] === hoy)
+    if (filtro === 'hoy')      return cuotas.filter(c => esMora(c) || fvDe(c) === hoy)
+    if (filtro === 'hoy_solo') return cuotas.filter(c => fvDe(c) === hoy)
+    if (filtro === 'manana')   return cuotas.filter(c => fvDe(c) === manana)
+    if (filtro === 'quince')   return cuotas.filter(c => enRuta(c) && fvDe(c) >= hoy && fvDe(c) <= mas15)
     if (filtro === 'mora')   return cuotas.filter(c => esMora(c))
     if (filtro === 'semana') {
       const fin = new Date(hoy); fin.setDate(fin.getDate() + 7)
@@ -139,6 +155,9 @@ export default function CobrosPage() {
 
     if (filtro === 'mora')   return g.cuotas.some(c => esMora(c))
     if (filtro === 'hoy')    return g.cuotas.some(c => esMora(c) || c.fecha_vencimiento?.split('T')[0] === hoy)
+    if (filtro === 'hoy_solo') return g.cuotas.some(c => fvDe(c) === hoy)
+    if (filtro === 'manana')   return g.cuotas.some(c => fvDe(c) === manana)
+    if (filtro === 'quince')   return g.cuotas.some(c => enRuta(c) && fvDe(c) >= hoy && fvDe(c) <= mas15)
     if (filtro === 'semana') {
       const fin = new Date(hoy); fin.setDate(fin.getDate() + 7)
       const finStr = `${fin.getFullYear()}-${String(fin.getMonth()+1).padStart(2,'0')}-${String(fin.getDate()).padStart(2,'0')}`
@@ -158,6 +177,63 @@ export default function CobrosPage() {
 
   const totalPendiente = gruposFiltrados.reduce((s,g) =>
     s + cuotasParaMostrar(g.cuotas).reduce((ss,c) => ss + pendiente(c), 0), 0)
+
+  // ─── BRÚJULA DE COBRO: clasificación por tramos (ruta de cobro) ───────────
+  const todasCuotas = grupos.flatMap(g => g.cuotas)
+  const bucketDe = {
+    vencidas: todasCuotas.filter(c => enRuta(c) && fvDe(c) <  hoy),
+    hoy:      todasCuotas.filter(c => enRuta(c) && fvDe(c) === hoy),
+    manana:   todasCuotas.filter(c => enRuta(c) && fvDe(c) === manana),
+    semana:   todasCuotas.filter(c => enRuta(c) && fvDe(c) >= hoy && fvDe(c) <= mas7),
+    quince:   todasCuotas.filter(c => enRuta(c) && fvDe(c) >= hoy && fvDe(c) <= mas15),
+  }
+  const sumPend   = arr => arr.reduce((s,c) => s + pendiente(c), 0)
+  const nClientes = arr => new Set(arr.map(c => c.cliente_id)).size
+
+  // ─── Exportar la ruta de cobro a un libro Excel con varias hojas ──────────
+  const exportarRuta = () => {
+    const wb = XLSX.utils.book_new()
+    const ordMora = (a,b) => diasDesde(b) - diasDesde(a)
+    const ordFecha = (a,b) => (fvDe(a) > fvDe(b) ? 1 : -1) || (a.nombre_cliente||'').localeCompare(b.nombre_cliente||'')
+
+    const tramos = [
+      { hoja: 'Vencidas', nombre: 'Vencidas (mora)', arr: [...bucketDe.vencidas].sort(ordMora) },
+      { hoja: 'Hoy',      nombre: 'Hoy',             arr: [...bucketDe.hoy].sort(ordFecha) },
+      { hoja: 'Mañana',   nombre: 'Mañana',          arr: [...bucketDe.manana].sort(ordFecha) },
+      { hoja: '7 días',   nombre: 'Próximos 7 días',  arr: [...bucketDe.semana].sort(ordFecha) },
+      { hoja: '15 días',  nombre: 'Próximos 15 días', arr: [...bucketDe.quince].sort(ordFecha) },
+    ]
+
+    // Hoja Resumen
+    const resumen = [
+      ['RUTA DE COBRO'], [`Generado: ${hoy}`], [],
+      ['Tramo', '# Cuotas', '# Clientes', 'Total pendiente'],
+      ...tramos.map(t => [t.nombre, t.arr.length, nClientes(t.arr), sumPend(t.arr)]),
+    ]
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumen), 'Resumen')
+
+    // Hojas de detalle
+    const encab = ['Cliente','Teléfono','Tipo','Descripción','Cuota #','Vence','Estado (días)','Capital','Interés','Valor cuota','Pagado','Pendiente']
+    const fila = c => {
+      const d = diasDesde(c)
+      const estado = d > 0 ? `${d} día(s) en mora` : d === 0 ? 'Vence hoy' : `Faltan ${Math.abs(d)} día(s)`
+      return [
+        c.nombre_cliente || '', c.telefono_cliente || '',
+        tipoLabel[c.tipo_producto] || c.tipo_producto || '',
+        c.descripcion_bien || c.descripcion || '',
+        c.numero_cuota ?? '', fvDe(c) || '', estado,
+        parseFloat(c.abono_capital || 0), parseFloat(c.abono_interes || 0),
+        parseFloat(c.monto_cuota || 0), parseFloat(c.monto_pagado || 0), pendiente(c),
+      ]
+    }
+    tramos.forEach(t => {
+      const aoa = [encab, ...t.arr.map(fila)]
+      if (t.arr.length) aoa.push(['','','','','','','TOTAL','','','','', sumPend(t.arr)])
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), t.hoja)
+    })
+
+    XLSX.writeFile(wb, `Ruta_Cobro_${hoy}.xlsx`)
+  }
 
   const abrirModal = (c, montoInicial) => {
     setModal(c)
@@ -329,6 +405,53 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
         </button>
       </div>
 
+      {/* ═══ BRÚJULA DE COBRO — centro de mando / ruta de cobro ═══ */}
+      <div className="bg-gradient-to-br from-slate-800 to-slate-700 rounded-2xl p-4 sm:p-5 shadow-lg">
+        <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+          <div>
+            <h3 className="text-white font-bold text-lg flex items-center gap-2">🧭 Brújula de cobro</h3>
+            <p className="text-slate-300 text-xs mt-0.5 capitalize">
+              Tu ruta de hoy en adelante — {new Date(hoy+'T12:00:00').toLocaleDateString('es-CO',{weekday:'long',day:'numeric',month:'long'})}
+            </p>
+          </div>
+          <button onClick={exportarRuta}
+            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2.5 rounded-xl font-semibold text-sm shadow-sm transition-colors">
+            📊 Exportar ruta a Excel
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+          {[
+            { k:'todas',    icon:'📋', label:'Todas',    arr: todasCuotas,       solid:'bg-slate-600',  accent:'bg-slate-100 text-slate-700'   },
+            { k:'mora',     icon:'🔴', label:'Vencidas', arr: bucketDe.vencidas, solid:'bg-red-500',    accent:'bg-red-100 text-red-700'       },
+            { k:'hoy_solo', icon:'📍', label:'Hoy',      arr: bucketDe.hoy,      solid:'bg-orange-500', accent:'bg-orange-100 text-orange-700' },
+            { k:'manana',   icon:'⏭️', label:'Mañana',   arr: bucketDe.manana,   solid:'bg-amber-500',  accent:'bg-amber-100 text-amber-700'   },
+            { k:'semana',   icon:'🗓️', label:'7 días',   arr: bucketDe.semana,   solid:'bg-blue-500',   accent:'bg-blue-100 text-blue-700'     },
+            { k:'quince',   icon:'🧭', label:'15 días',  arr: bucketDe.quince,   solid:'bg-indigo-500', accent:'bg-indigo-100 text-indigo-700' },
+          ].map(t => {
+            const activo = filtro === t.k
+            return (
+              <button key={t.k}
+                onClick={() => {
+                  setFiltro(t.k)
+                  if (t.k === 'todas') setAbiertos({})
+                  else { const ab = {}; grupos.forEach(g => { ab[g.producto_id] = true }); setAbiertos(ab) }
+                }}
+                className={`text-left rounded-xl p-3 transition-all ${activo
+                  ? `${t.solid} text-white shadow-lg scale-[1.05] ring-2 ring-white/70`
+                  : 'bg-white shadow-sm hover:bg-slate-50'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-lg">{t.icon}</span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activo ? 'bg-white/25 text-white' : t.accent}`}>{t.arr.length}</span>
+                </div>
+                <p className={`text-[11px] font-semibold uppercase tracking-wide mt-1 ${activo ? 'text-white/85' : 'text-gray-500'}`}>{t.label}</p>
+                <p className={`text-sm font-black leading-tight mt-0.5 ${activo ? 'text-white' : 'text-gray-800'}`}>{fmt(sumPend(t.arr))}</p>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       {recibo && (
         <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex justify-between items-center">
           <span className="text-green-700 font-medium">✅ Pago registrado — {recibo}</span>
@@ -357,51 +480,8 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
             }
             // Si se borra el texto, cerrar acordeones pero no ocultar la lista
           }} />
-        <div className="flex gap-2 flex-wrap">
-          {[
-            { k:'todas',  l:'Todas',    desc:'Todas las cuotas pendientes o con abono parcial',
-              count: grupos.length },
-            { k:'mora',   l:'En mora',  desc:'Cuotas vencidas sin pagar al 100%',
-              count: grupos.filter(g=>g.cuotas.some(c=>esMora(c))).length,  color:'text-red-500' },
-            { k:'hoy',    l:'Hoy',      desc:'Cuotas que vencen hoy',
-              count: grupos.filter(g=>g.cuotas.some(c=>c.fecha_vencimiento?.split('T')[0]===hoy)).length, color:'text-orange-500' },
-            { k:'semana', l:'Semana',   desc:'Vencen en los próximos 7 días',
-              count: grupos.filter(g=>g.cuotas.some(c=>{
-                const fin=new Date(hoy); fin.setDate(fin.getDate()+7)
-                const fv=c.fecha_vencimiento?.split('T')[0]
-                return fv>=hoy && fv<=fin.toISOString().split('T')[0]
-              })).length, color:'text-yellow-600' },
-          ].map(({k,l,desc,count,color})=>(
-            <div key={k} className="relative group">
-              <button onClick={()=>{
-                setFiltro(k)
-                // Auto-abrir acordeones para filtros distintos a "todas"
-                if (k !== 'todas') {
-                  const ab = {}
-                  grupos.forEach(g => { ab[g.producto_id] = true })
-                  setAbiertos(ab)
-                } else {
-                  setAbiertos({})
-                }
-              }}
-                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5
-                  ${filtro===k?'bg-primary-600 text-white':'bg-white border text-gray-600 hover:bg-gray-50'}`}>
-                {l}
-                <span className={`text-xs font-bold ${filtro===k?'text-white/80':color||'text-gray-400'}`}>
-                  {count}
-                </span>
-              </button>
-              {/* Tooltip */}
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
-                <div className="bg-gray-800 text-white text-xs rounded-lg px-3 py-1.5 whitespace-nowrap shadow-lg">
-                  {desc}
-                </div>
-                <div className="w-2 h-2 bg-gray-800 rotate-45 mx-auto -mt-1"></div>
-              </div>
-            </div>
-          ))}
-
-          {/* Rango de fechas */}
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* Rango de fechas (de hoy hacia atrás, para revisar ventanas pasadas) */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <span className="text-xs text-gray-500 font-medium">📅 Rango:</span>
             <div className="flex items-center gap-2">

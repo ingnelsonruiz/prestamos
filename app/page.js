@@ -93,6 +93,11 @@ export default function Dashboard() {
   const [error,    setError]    = useState(null)
   const [fechaHoy, setFechaHoy] = useState('')
 
+  // Filtro de rango de fechas
+  const [desde, setDesde] = useState('')
+  const [hasta, setHasta] = useState('')
+  const [rango, setRango] = useState(null)   // { desde, hasta } aplicado
+
   useEffect(() => {
     setFechaHoy(
       new Date().toLocaleDateString('es-CO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
@@ -100,11 +105,19 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/dashboard')
+    const qs = rango ? `?desde=${rango.desde}&hasta=${rango.hasta}` : ''
+    fetch(`/api/dashboard${qs}`)
       .then(r => r.json())
       .then(setData)
       .catch(e => setError(e.message))
-  }, [])
+  }, [rango])
+
+  const aplicarRango = () => {
+    if (desde && hasta && desde <= hasta) setRango({ desde, hasta })
+  }
+  const limpiarRango = () => { setDesde(''); setHasta(''); setRango(null) }
+
+  const fmtFecha = s => new Date(s + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
 
   if (error)       return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error: {error}</div>
   if (!data)       return <div className="text-gray-400 p-6 text-center">Cargando dashboard…</div>
@@ -119,17 +132,48 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Encabezado */}
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-800">Dashboard</h2>
           <p className="text-sm text-gray-500 mt-0.5 capitalize">{fechaHoy}</p>
         </div>
-        <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+        <span className="text-xs bg-gray-100 text-gray-500 px-3 py-1 rounded-full self-start md:self-auto">
           ROI histórico: <strong>{roi}%</strong>
         </span>
       </div>
 
-      {/* ═══ FILA 1 — Tres cifras clave para el dueño ═══ */}
+      {/* ═══ Filtro de rango de fechas ═══ */}
+      <div className="bg-white border rounded-xl p-4 flex flex-col sm:flex-row sm:items-end gap-3 flex-wrap">
+        <div className="flex flex-col">
+          <label className="text-[11px] uppercase tracking-wide font-semibold text-gray-500 mb-1">Desde</label>
+          <input type="date" value={desde} max={hasta || undefined}
+            onChange={e => setDesde(e.target.value)}
+            className="border rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        </div>
+        <div className="flex flex-col">
+          <label className="text-[11px] uppercase tracking-wide font-semibold text-gray-500 mb-1">Hasta</label>
+          <input type="date" value={hasta} min={desde || undefined}
+            onChange={e => setHasta(e.target.value)}
+            className="border rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        </div>
+        <button onClick={aplicarRango} disabled={!desde || !hasta || desde > hasta}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          Aplicar rango
+        </button>
+        {rango && (
+          <button onClick={limpiarRango}
+            className="bg-white border text-gray-600 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 transition-colors">
+            Limpiar
+          </button>
+        )}
+        {rango && (
+          <span className="text-xs text-gray-500 sm:ml-auto self-center">
+            Mostrando recaudo e intereses del <strong>{fmtFecha(rango.desde)}</strong> al <strong>{fmtFecha(rango.hasta)}</strong>
+          </span>
+        )}
+      </div>
+
+      {/* ═══ FILA 1 — Tres cifras clave para el dueño (capital, proyectado, recogido) ═══ */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <HeroCard
           titulo="💰 Capital en la calle"
@@ -144,12 +188,12 @@ export default function Dashboard() {
           bg="bg-gradient-to-br from-emerald-600 to-emerald-500"
         />
         <HeroCard
-          titulo="🏦 Saldo de caja"
-          valor={fmt(capital.saldo_caja)}
-          sub="Efectivo acumulado registrado"
-          bg={capital.saldo_caja >= 0
-            ? 'bg-gradient-to-br from-violet-600 to-violet-500'
-            : 'bg-gradient-to-br from-red-600 to-red-500'}
+          titulo="💵 Intereses recogidos"
+          valor={rango ? fmt(intereses.rango) : fmt(intereses.total)}
+          sub={rango
+            ? `Recogido del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}`
+            : 'Ganancia por intereses ya cobrada'}
+          bg="bg-gradient-to-br from-amber-500 to-orange-500"
         />
       </div>
 
@@ -238,6 +282,7 @@ export default function Dashboard() {
             semana={fmt(intereses.semana)}
             mes={fmt(intereses.mes)}
             total={fmt(intereses.total)}
+            extra={rango ? [{ label: '📅 Rango seleccionado', val: fmt(intereses.rango) }] : undefined}
           />
 
           {/* Mora */}
@@ -263,6 +308,10 @@ export default function Dashboard() {
             semana={fmt(recaudo.semana)}
             mes={fmt(recaudo.mes)}
             total={fmt(recaudo.total)}
+            extra={rango ? [
+              { label: '📅 Rango seleccionado', val: fmt(recaudo.rango) },
+              { label: 'Pagos en el rango',     val: `${recaudo.rango_pagos} pago${recaudo.rango_pagos !== 1 ? 's' : ''}` },
+            ] : undefined}
           />
 
           {/* Cartera vencida */}

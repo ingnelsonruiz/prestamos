@@ -3,9 +3,20 @@ import { query } from '@/lib/db'
 
 const S = 'administrativo'
 
-export async function GET() {
+export async function GET(request) {
   try {
     const hoy = new Date().toISOString().split('T')[0]
+
+    // Rango de fechas opcional (?desde=YYYY-MM-DD&hasta=YYYY-MM-DD)
+    const { searchParams } = new URL(request.url)
+    const rangoValido = /^\d{4}-\d{2}-\d{2}$/
+    let desde = searchParams.get('desde')
+    let hasta = searchParams.get('hasta')
+    desde = rangoValido.test(desde || '') ? desde : null
+    hasta = rangoValido.test(hasta || '') ? hasta : null
+    // Si solo viene uno, se ignora el rango (requiere ambos extremos)
+    const hayRango = Boolean(desde && hasta)
+    if (!hayRango) { desde = null; hasta = null }
 
     const [
       carteraEstados,
@@ -15,7 +26,6 @@ export async function GET() {
       carteraVencida,
       capitalCalle,
       interesesProyectados,
-      saldoCaja,
       cuotasHoy,
       cuotasSemana,
       empenosVencer,
@@ -63,10 +73,13 @@ export async function GET() {
             THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS semana,
           COALESCE(SUM(CASE WHEN p.fecha_pago::date >= DATE_TRUNC('month', $1::date)
             THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS mes,
-          COALESCE(SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)), 0) AS total
+          COALESCE(SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)), 0) AS total,
+          COALESCE(SUM(CASE WHEN $2::date IS NOT NULL
+            AND p.fecha_pago::date BETWEEN $2::date AND $3::date
+            THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS rango
         FROM ${S}.cred_pagos p
         JOIN ${S}.cred_cuotas cu ON cu.id = p.cuota_id
-      `, [hoy]),
+      `, [hoy, desde, hasta]),
 
       // 3. Mora: clientes y montos por antigüedad
       //    Usa comparación de fechas — NO usa estado='mora' que no se auto-asigna
@@ -104,9 +117,13 @@ export async function GET() {
           COALESCE(SUM(CASE WHEN fecha_pago::date = $1                             THEN monto END), 0) AS hoy,
           COALESCE(SUM(CASE WHEN fecha_pago::date >= DATE_TRUNC('week',  $1::date) THEN monto END), 0) AS semana,
           COALESCE(SUM(CASE WHEN fecha_pago::date >= DATE_TRUNC('month', $1::date) THEN monto END), 0) AS mes,
-          COALESCE(SUM(monto), 0) AS total
+          COALESCE(SUM(monto), 0) AS total,
+          COALESCE(SUM(CASE WHEN $2::date IS NOT NULL
+            AND fecha_pago::date BETWEEN $2::date AND $3::date THEN monto END), 0) AS rango,
+          COUNT(CASE WHEN $2::date IS NOT NULL
+            AND fecha_pago::date BETWEEN $2::date AND $3::date THEN 1 END)::int AS rango_pagos
         FROM ${S}.cred_pagos
-      `, [hoy]),
+      `, [hoy, desde, hasta]),
 
       // 5. Cartera vencida por antigüedad (comparación de fechas — NO estado='mora')
       query(`
@@ -156,15 +173,7 @@ export async function GET() {
           AND cu.fecha_vencimiento != '2099-12-31'
       `),
 
-      // 8. Saldo actual de caja
-      query(`
-        SELECT COALESCE(
-          (SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1),
-          0
-        ) AS saldo
-      `),
-
-      // 9. Cuotas que vencen HOY (pendientes/parciales)
+      // 8. Cuotas que vencen HOY (pendientes/parciales)
       query(`
         SELECT cu.*, c.nombre AS nombre_cliente, p.tipo
         FROM ${S}.cred_cuotas cu
@@ -235,6 +244,7 @@ export async function GET() {
         semana: parseFloat(ip.semana),
         mes:    parseFloat(ip.mes),
         total:  parseFloat(ip.total),
+        rango:  parseFloat(ip.rango),
       },
       mora: {
         clientes_total: mp.clientes_total,
@@ -249,6 +259,8 @@ export async function GET() {
         semana: parseFloat(rp.semana),
         mes:    parseFloat(rp.mes),
         total:  parseFloat(rp.total),
+        rango:  parseFloat(rp.rango),
+        rango_pagos: rp.rango_pagos,
       },
       cartera_vencida: {
         vencio_hoy:    parseFloat(cv.vencio_hoy),
@@ -260,8 +272,8 @@ export async function GET() {
       capital: {
         en_calle:              parseFloat(capitalCalle.rows[0].total),
         intereses_proyectados: parseFloat(interesesProyectados.rows[0].total),
-        saldo_caja:            parseFloat(saldoCaja.rows[0].saldo),
       },
+      rango: hayRango ? { desde, hasta } : null,
       cuotas_hoy:     cuotasHoy.rows,
       cuotas_semana:  cuotasSemana.rows,
       empenos_vencer: empenosVencer.rows,
