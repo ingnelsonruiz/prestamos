@@ -153,10 +153,35 @@ export default function PerfilCliente() {
   const [data, setData]           = useState(null)
   const [showQR, setShowQR]       = useState(false)
   const [filtro, setFiltro]       = useState('activos')
+  const [editModal, setEditModal] = useState(false)
+  const [editForm, setEditForm]   = useState({})
+  const [editLoading, setEditLoading] = useState(false)
+  const [editError, setEditError]     = useState('')
+  const [editOk, setEditOk]           = useState(false)
 
-  useEffect(() => {
-    fetch(`/api/clientes/${id}`).then(r=>r.json()).then(setData)
-  }, [id])
+  const cargar = () => fetch(`/api/clientes/${id}`).then(r=>r.json()).then(setData)
+
+  useEffect(() => { cargar() }, [id])
+
+  const abrirEditar = () => {
+    setEditForm({ nombre: data.nombre, telefono: data.telefono||'', direccion: data.direccion||'', email: data.email||'' })
+    setEditError(''); setEditOk(false); setEditModal(true)
+  }
+
+  const guardarCliente = async () => {
+    if (!editForm.nombre?.trim()) { setEditError('El nombre es obligatorio'); return }
+    setEditLoading(true); setEditError('')
+    const res  = await fetch(`/api/clientes/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre: editForm.nombre.trim(), telefono: editForm.telefono||null, direccion: editForm.direccion||null, email: editForm.email||null })
+    })
+    const json = await res.json()
+    setEditLoading(false)
+    if (!res.ok) { setEditError(json.error || 'Error al guardar'); return }
+    setEditOk(true)
+    cargar()
+    setTimeout(() => { setEditModal(false); setEditOk(false) }, 900)
+  }
 
   if (!data) return (
     <div className="flex items-center justify-center h-64">
@@ -185,6 +210,67 @@ export default function PerfilCliente() {
   return (
     <div className="max-w-4xl space-y-5">
       {showQR && <ModalQR clienteId={id} nombre={data.nombre} telefono={data.telefono} onClose={() => setShowQR(false)} />}
+
+      {/* ── MODAL EDITAR CLIENTE ── */}
+      {editModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h3 className="font-bold text-gray-800">✏️ Editar cliente</h3>
+              <button onClick={() => setEditModal(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              {/* Documento — solo lectura */}
+              <div>
+                <label className="text-xs font-medium text-gray-500">CC / NIT</label>
+                <div className="mt-1 w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 text-gray-400 font-mono">
+                  {data.documento}
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">El documento de identidad no es editable.</p>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-700">Nombre completo <span className="text-red-500">*</span></label>
+                <input autoFocus type="text"
+                  className="mt-1 w-full border rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  value={editForm.nombre} onChange={e => setEditForm(f=>({...f, nombre: e.target.value}))}
+                  onKeyDown={e => e.key === 'Enter' && guardarCliente()} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-700">Teléfono / Celular</label>
+                <input type="tel"
+                  className="mt-1 w-full border rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="Ej. 3001234567"
+                  value={editForm.telefono} onChange={e => setEditForm(f=>({...f, telefono: e.target.value}))} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-700">Dirección</label>
+                <input type="text"
+                  className="mt-1 w-full border rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="Opcional"
+                  value={editForm.direccion} onChange={e => setEditForm(f=>({...f, direccion: e.target.value}))} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-700">Correo electrónico</label>
+                <input type="email"
+                  className="mt-1 w-full border rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="Opcional"
+                  value={editForm.email} onChange={e => setEditForm(f=>({...f, email: e.target.value}))} />
+              </div>
+              {editError && <p className="text-red-500 text-sm">{editError}</p>}
+              {editOk    && <p className="text-green-600 text-sm font-semibold">✅ Guardado correctamente</p>}
+            </div>
+            <div className="px-5 pb-5 flex gap-3">
+              <button onClick={() => setEditModal(false)}
+                className="flex-1 border rounded-xl py-3 text-sm text-gray-600 hover:bg-gray-50">
+                Cancelar
+              </button>
+              <button onClick={guardarCliente} disabled={editLoading}
+                className="flex-1 bg-[#1e3a5f] text-white rounded-xl py-3 text-sm font-semibold hover:bg-[#16304f] disabled:opacity-50 transition-colors">
+                {editLoading ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        </div>}
 
       {/* ── BREADCRUMB ── */}
       <div className="flex items-center gap-2 text-sm text-gray-400">
@@ -219,12 +305,19 @@ export default function PerfilCliente() {
                 </div>
               </div>
             </div>
-            {/* Botón QR */}
-            <button onClick={() => setShowQR(true)}
-              className="flex-shrink-0 border-2 border-[#1e3a5f] text-[#1e3a5f] hover:bg-[#1e3a5f] hover:text-white rounded-xl px-4 py-2 font-bold transition-all flex items-center gap-2 text-sm">
-              <span>📱</span>
-              <span>Ver QR</span>
-            </button>
+            {/* Botones QR + Editar */}
+            <div className="flex flex-col gap-2 flex-shrink-0">
+              <button onClick={() => setShowQR(true)}
+                className="border-2 border-[#1e3a5f] text-[#1e3a5f] hover:bg-[#1e3a5f] hover:text-white rounded-xl px-4 py-2 font-bold transition-all flex items-center gap-2 text-sm">
+                <span>📱</span>
+                <span>Ver QR</span>
+              </button>
+              <button onClick={abrirEditar}
+                className="border-2 border-gray-300 text-gray-600 hover:border-gray-500 hover:text-gray-800 rounded-xl px-4 py-2 font-semibold transition-all flex items-center gap-2 text-sm">
+                <span>✏️</span>
+                <span>Editar</span>
+              </button>
+            </div>
           </div>
 
           {/* KPIs */}

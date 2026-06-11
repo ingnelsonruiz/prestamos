@@ -31,11 +31,22 @@ export async function PUT(request, { params }) {
   try {
     const { id } = params
     const { nombre, telefono, direccion, email } = await request.json()
-    const result = await query(
-      `UPDATE ${S}.cred_clientes SET nombre=$1,telefono=$2,direccion=$3,email=$4 WHERE id=$5 RETURNING *`,
-      [nombre, telefono||null, direccion||null, email||null, id]
-    )
+    if (!nombre?.trim()) return NextResponse.json({ error: 'El nombre es obligatorio' }, { status: 400 })
+
+    const [result, u] = await Promise.all([
+      query(
+        `UPDATE ${S}.cred_clientes SET nombre=$1,telefono=$2,direccion=$3,email=$4 WHERE id=$5 RETURNING *`,
+        [nombre.trim(), telefono||null, direccion||null, email||null, id]
+      ),
+      getUsuarioDesdeRequest(request),
+    ])
     if (!result.rows.length) return NextResponse.json({ error: 'No encontrado' }, { status: 404 })
+
+    auditar({ ...u, accion: ACCIONES.EDITAR_CLIENTE || 'Editar cliente', modulo: MODULOS.CLIENTES,
+      descripcion: `Editó datos de cliente: ${nombre.trim()}`,
+      detalle: { id, nombre: nombre.trim(), telefono, direccion, email }
+    }).catch(err => console.error('[auditoría editar cliente]', err.message))
+
     return NextResponse.json(result.rows[0])
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
