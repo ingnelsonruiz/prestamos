@@ -353,6 +353,19 @@ export default function DetallePrestamo() {
                 {data.fecha_creacion ? new Date(data.fecha_creacion).toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '—'}
               </p>
             </div>
+            {data.metodo_desembolso && (
+              <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
+                <p className="text-xs text-gray-400">💸 Desembolso</p>
+                <p className="font-bold text-gray-800 mt-0.5">
+                  {({efectivo:'💵 Efectivo',transferencia:'🏦 Transferencia',nequi:'📱 Nequi',daviplata:'📱 Daviplata',llave_breb:'🔑 Llave Bre-B',otro:'Otro'})[data.metodo_desembolso] || data.metodo_desembolso}
+                </p>
+                {(data.entidad_desembolso || data.referencia_desembolso) && (
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {[data.entidad_desembolso, data.referencia_desembolso].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+              </div>
+            )}
             {data.tipo !== 'fiado' && data.tipo !== 'adelanto' && (
               <>
                 <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
@@ -527,6 +540,19 @@ export default function DetallePrestamo() {
               {data.fecha_creacion ? new Date(data.fecha_creacion).toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'}) : '—'}
             </p>
           </div>
+          {data.metodo_desembolso && (
+            <div className="bg-gray-50 rounded-lg px-3 py-2">
+              <p className="text-xs text-gray-400 mb-0.5">💸 Desembolso</p>
+              <p className="font-semibold text-gray-700">
+                {({efectivo:'💵 Efectivo',transferencia:'🏦 Transferencia',nequi:'📱 Nequi',daviplata:'📱 Daviplata',llave_breb:'🔑 Llave Bre-B',otro:'Otro'})[data.metodo_desembolso] || data.metodo_desembolso}
+              </p>
+              {(data.entidad_desembolso || data.referencia_desembolso) && (
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  {[data.entidad_desembolso, data.referencia_desembolso].filter(Boolean).join(' · ')}
+                </p>
+              )}
+            </div>
+          )}
           {data.tipo !== 'fiado' && data.tipo !== 'adelanto' && (
             <>
               <div className="bg-gray-50 rounded-lg px-3 py-2">
