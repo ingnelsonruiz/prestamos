@@ -1064,10 +1064,14 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
 
             <div>
               <label className="text-xs font-medium text-gray-600">Monto a recibir</label>
-              <input type="number" min="1"
+              <input type="text"
                 className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:outline-none"
-                value={monto}
-                onChange={e => { setMonto(e.target.value); setTipoPago('personalizado') }}
+                value={monto !== '' ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(Number(monto)) : ''}
+                onChange={e => {
+                  const raw = e.target.value.replace(/[^0-9]/g, '')
+                  setMonto(raw)
+                  setTipoPago('personalizado')
+                }}
                 readOnly={tipoPago !== 'personalizado'}
               />
               {tipoPago !== 'personalizado' && (
