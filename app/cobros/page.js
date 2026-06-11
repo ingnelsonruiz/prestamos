@@ -174,6 +174,11 @@ export default function CobrosPage() {
     if (tipo === 'solo_interes')  setMonto(String(interesPend(cuota)))
     if (tipo === 'abono_capital') setMonto(String(capitalPend(cuota)))
     if (tipo === 'personalizado') setMonto('')
+    if (tipo === 'recoger_credito') {
+      const grupo = grupos.find(g => g.producto_id === cuota.producto_id)
+      const totalCapital = grupo ? grupo.cuotas.reduce((s, c) => s + capitalPend(c), 0) : capitalPend(cuota)
+      setMonto(String(interesPend(cuota) + totalCapital))
+    }
   }
 
   // Abre el modal con la PRIMERA cuota pendiente y el total del crédito
@@ -247,9 +252,10 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
     if (!montoNum || montoNum <= 0) { setError('Monto inválido'); return }
     // Prefijo automático según tipo para historial
     const prefijos = {
-      solo_interes:  '💸 Solo intereses — ',
-      abono_capital: '💰 Abono a capital — ',
-      personalizado: '✏️ Monto personalizado — ',
+      solo_interes:    '💸 Solo intereses — ',
+      abono_capital:   '💰 Abono a capital — ',
+      personalizado:   '✏️ Monto personalizado — ',
+      recoger_credito: '🏁 Recoger crédito — ',
     }
     const notaFinal = (prefijos[tipoPago] || '') + (notas || '')
     setLoading(true); setError('')
@@ -1017,12 +1023,17 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
             {modal.tipo_producto !== 'fiado' && modal.tipo_producto !== 'adelanto' && interesBase(modal) > 0 && (
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-2">¿Qué paga el cliente?</label>
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5 [&>*:last-child]:col-span-2">
                   {[
-                    { key: 'completo',      label: '✅ Cuota completa',  monto: fmt(pendiente(modal)),   color: 'bg-green-600 text-white' },
-                    { key: 'solo_interes',  label: '💸 Solo intereses',  monto: fmt(interesPend(modal)), color: 'bg-orange-500 text-white' },
-                    { key: 'abono_capital', label: '💰 Abono capital',   monto: fmt(capitalPend(modal)), color: 'bg-blue-600 text-white'   },
-                    { key: 'personalizado', label: '✏️ Personalizado',   monto: 'libre',                 color: 'bg-gray-600 text-white'   },
+                    { key: 'completo',        label: '✅ Cuota completa',   monto: fmt(pendiente(modal)),   color: 'bg-green-600 text-white' },
+                    { key: 'solo_interes',    label: '💸 Solo intereses',   monto: fmt(interesPend(modal)), color: 'bg-orange-500 text-white' },
+                    { key: 'abono_capital',   label: '💰 Abono capital',    monto: fmt(capitalPend(modal)), color: 'bg-blue-600 text-white'   },
+                    { key: 'recoger_credito', label: '🏁 Recoger crédito',  monto: (() => {
+                        const grupo = grupos.find(g => g.producto_id === modal.producto_id)
+                        const totalCap = grupo ? grupo.cuotas.reduce((s,c) => s + capitalPend(c), 0) : capitalPend(modal)
+                        return fmt(interesPend(modal) + totalCap)
+                      })(),                                                   color: 'bg-purple-600 text-white'  },
+                    { key: 'personalizado',   label: '✏️ Personalizado',    monto: 'libre',                 color: 'bg-gray-600 text-white'   },
                   ].map(op => (
                     <button key={op.key}
                       onClick={() => seleccionarTipo(op.key, modal)}
