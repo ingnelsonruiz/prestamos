@@ -29,6 +29,7 @@ export default function CobrosPage() {
   const [loadingArqueo, setLoadingArqueo] = useState(false)
   const [historialPagos, setHistorialPagos] = useState({})  // keyed by producto_id
   const [alertaRefinanciar, setAlertaRefinanciar] = useState(null) // { productoId, capitalPendiente, nombreCliente }
+  const [envio, setEnvio] = useState(null) // { tramoKey, tramoLabel, lista:[...], idx, enviados:{} }
 
   // Fecha local sin desfase UTC
   const hoy = (() => {
@@ -233,6 +234,67 @@ export default function CobrosPage() {
     })
 
     XLSX.writeFile(wb, `Ruta_Cobro_${hoy}.xlsx`)
+  }
+
+  // ─── ENVÍO ASISTIDO DE WHATSAPP (masivo, cliente por cliente) ─────────────
+  const EMPRESA = '*Inversiones Hnos Liñán*'
+  const bucketPorKey = k =>
+    k === 'mora'   ? bucketDe.vencidas :
+    k === 'hoy_solo' ? bucketDe.hoy :
+    k === 'manana' ? bucketDe.manana :
+    k === 'semana' ? bucketDe.semana : bucketDe.quince
+
+  // Mensaje respetuoso, personalizado y recordando el compromiso de pago
+  const buildMensaje = (tramoKey, cl) => {
+    const lineas = cl.cuotas.map(c => {
+      const fv  = new Date(fvDe(c) + 'T12:00:00').toLocaleDateString('es-CO')
+      const cap = capitalPend(c)
+      const int = interesPend(c)
+      const desglose = int > 0 ? `\n    Capital: ${fmt(cap)}  +  Interés: ${fmt(int)}` : ''
+      if (tramoKey === 'mora') {
+        const dias = diasDesde(c)
+        return `  • Cuota #${c.numero_cuota} — venció el ${fv} (${dias} día${dias !== 1 ? 's' : ''} de mora)${desglose}\n    Total a pagar: ${fmt(pendiente(c))}`
+      }
+      return `  • Cuota #${c.numero_cuota} — vence el ${fv}${desglose}\n    Total a pagar: ${fmt(pendiente(c))}`
+    }).join('\n')
+    const total = fmt(cl.total)
+
+    if (tramoKey === 'mora')
+      return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. De forma respetuosa le recordamos que a la fecha tiene cuota(s) pendiente(s):\n\n${lineas}\n\n*Total pendiente: ${total}*\n\nConfiamos en su compromiso de ponerse al día. Si ya realizó el pago, por favor ignore este mensaje. Quedamos atentos para cualquier acuerdo. Muchas gracias.`
+    if (tramoKey === 'hoy_solo')
+      return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. Le recordamos amablemente que *hoy* vence su pago:\n\n${lineas}\n\n*Valor a pagar: ${total}*\n\nAgradecemos su cumplimiento y compromiso. Quedamos atentos.`
+    if (tramoKey === 'manana')
+      return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. Un recordatorio cordial: *mañana* vence su pago:\n\n${lineas}\n\n*Valor: ${total}*\n\nLe agradecemos de antemano su puntualidad y compromiso. Gracias.`
+    return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. Le recordamos con respeto su(s) próxima(s) cuota(s):\n\n${lineas}\n\n*Total próximo: ${total}*\n\nGracias por su compromiso de pago. Quedamos atentos ante cualquier inquietud.`
+  }
+
+  const iniciarEnvio = (tramoKey, tramoLabel) => {
+    const arr = bucketPorKey(tramoKey)
+    const map = {}
+    arr.forEach(c => {
+      const id = c.cliente_id
+      if (!map[id]) map[id] = { cliente_id: id, nombre: c.nombre_cliente, telefono: c.telefono_cliente, cuotas: [] }
+      map[id].cuotas.push(c)
+    })
+    const lista = Object.values(map)
+      .map(cl => {
+        const full = { ...cl, total: cl.cuotas.reduce((s, c) => s + pendiente(c), 0) }
+        return { ...full, mensaje: buildMensaje(tramoKey, full) }
+      })
+      .sort((a, b) => (b.telefono ? 1 : 0) - (a.telefono ? 1 : 0) || (a.nombre || '').localeCompare(b.nombre || ''))
+    if (lista.length === 0) return
+    setEnvio({ tramoKey, tramoLabel, lista, idx: 0, enviados: {} })
+    setCopiado(false)
+  }
+
+  const avanzarEnvio = (marcado) => {
+    setEnvio(e => {
+      if (!e) return e
+      const cur = e.lista[e.idx]
+      const enviados = marcado && cur ? { ...e.enviados, [cur.cliente_id]: true } : e.enviados
+      return { ...e, idx: e.idx + 1, enviados }
+    })
+    setCopiado(false)
   }
 
   const abrirModal = (c, montoInicial) => {
@@ -446,6 +508,27 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                 </div>
                 <p className={`text-[11px] font-semibold uppercase tracking-wide mt-1 ${activo ? 'text-white/85' : 'text-gray-500'}`}>{t.label}</p>
                 <p className={`text-sm font-black leading-tight mt-0.5 ${activo ? 'text-white' : 'text-gray-800'}`}>{fmt(sumPend(t.arr))}</p>
+              </button>
+            )
+          })}
+        </div>
+
+        {/* WhatsApp masivo asistido por tramo */}
+        <div className="flex flex-wrap items-center gap-2 mt-4 bg-white rounded-xl p-3 shadow-sm">
+          <span className="text-gray-600 text-xs font-semibold flex items-center gap-1">📲 WhatsApp masivo:</span>
+          {[
+            { k:'mora',     l:'Vencidas', arr: bucketDe.vencidas },
+            { k:'hoy_solo', l:'Hoy',      arr: bucketDe.hoy },
+            { k:'manana',   l:'Mañana',   arr: bucketDe.manana },
+            { k:'semana',   l:'7 días',   arr: bucketDe.semana },
+            { k:'quince',   l:'15 días',  arr: bucketDe.quince },
+          ].map(b => {
+            const n = new Set(b.arr.map(c => c.cliente_id)).size
+            return (
+              <button key={b.k} disabled={n === 0} onClick={() => iniciarEnvio(b.k, b.l)}
+                className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebe5d] disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors">
+                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413z"/></svg>
+                {b.l} <span className="opacity-80">({n})</span>
               </button>
             )
           })}
@@ -1420,6 +1503,103 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
         </div>
       </div>
     )}
+
+    {/* ── Modal: envío asistido de WhatsApp (masivo) ── */}
+    {envio && (() => {
+      const total     = envio.lista.length
+      const enviadosN = Object.keys(envio.enviados).length
+      const terminado = envio.idx >= total
+      const cur       = terminado ? null : envio.lista[envio.idx]
+      const tel       = cur?.telefono ? cur.telefono.replace(/\D/g, '') : ''
+      return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[92vh]">
+            {/* Cabecera */}
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-2xl">📲</span>
+                <div className="min-w-0">
+                  <p className="font-bold text-gray-800 truncate">Envío asistido — {envio.tramoLabel}</p>
+                  <p className="text-xs text-gray-500">{enviadosN} enviado(s) · {total} cliente(s)</p>
+                </div>
+              </div>
+              <button onClick={() => setEnvio(null)} className="text-gray-400 hover:text-gray-600 text-xl flex-shrink-0">✕</button>
+            </div>
+
+            {/* Barra de progreso */}
+            <div className="px-5 pt-3">
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div className="bg-[#25D366] h-2 rounded-full transition-all"
+                  style={{ width: `${total > 0 ? (Math.min(envio.idx, total) / total) * 100 : 0}%` }} />
+              </div>
+            </div>
+
+            {terminado ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10">
+                <p className="text-5xl mb-3">✅</p>
+                <p className="font-bold text-gray-800">Recorrido terminado</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Abriste WhatsApp para {enviadosN} de {total} cliente(s) del tramo <strong>{envio.tramoLabel}</strong>.
+                </p>
+                <button onClick={() => setEnvio(null)}
+                  className="mt-5 bg-primary-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-primary-700">
+                  Cerrar
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="px-5 py-3 border-b flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold text-gray-800 truncate">{cur.nombre}</p>
+                    <p className="text-xs text-gray-500">Cliente {envio.idx + 1} de {total} · {fmt(cur.total)}</p>
+                  </div>
+                  {cur.telefono
+                    ? <span className="text-xs font-bold bg-green-100 text-green-700 px-2.5 py-1 rounded-full whitespace-nowrap flex-shrink-0">📞 {cur.telefono}</span>
+                    : <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full flex-shrink-0">Sin teléfono</span>}
+                </div>
+
+                {/* Vista del mensaje */}
+                <div className="flex-1 overflow-y-auto p-4 bg-[#e5ddd5]">
+                  <div className="flex justify-end">
+                    <div className="bg-[#dcf8c6] rounded-2xl rounded-tr-sm px-4 py-3 max-w-xs shadow-sm">
+                      <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans leading-relaxed">{cur.mensaje}</pre>
+                      <p className="text-right text-xs text-gray-400 mt-1">✓✓</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Acciones */}
+                <div className="px-5 py-4 border-t space-y-2">
+                  {cur.telefono ? (
+                    <a href={`https://wa.me/57${tel}?text=${encodeURIComponent(cur.mensaje)}`}
+                       target="_blank" rel="noreferrer"
+                       onClick={() => avanzarEnvio(true)}
+                       className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#25D366] text-white font-semibold text-sm hover:bg-[#1ebe5d] transition-colors">
+                      Abrir WhatsApp y siguiente →
+                    </a>
+                  ) : (
+                    <button onClick={() => avanzarEnvio(false)}
+                       className="w-full py-3 rounded-xl bg-amber-100 text-amber-800 font-semibold text-sm hover:bg-amber-200 transition-colors">
+                      Sin teléfono — saltar →
+                    </button>
+                  )}
+                  <div className="flex gap-2">
+                    <button onClick={() => { navigator.clipboard.writeText(cur.mensaje); setCopiado(true); setTimeout(() => setCopiado(false), 2000) }}
+                      className="flex-1 py-2.5 rounded-xl border text-gray-600 text-xs font-semibold hover:bg-gray-50">
+                      {copiado ? '✅ Copiado' : '📋 Copiar'}
+                    </button>
+                    <button onClick={() => avanzarEnvio(false)}
+                      className="flex-1 py-2.5 rounded-xl border text-gray-500 text-xs font-semibold hover:bg-gray-50">
+                      Saltar →
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )
+    })()}
 
   </div>
   )
