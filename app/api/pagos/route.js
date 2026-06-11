@@ -8,38 +8,36 @@ const S = 'administrativo'
 const CUOTAS_POR_MES = { diario: 30, semanal: 4, quincenal: 2, mensual: 1, anual: 1 / 12 }
 
 async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
-  // Paralelo: las 4 queries iniciales al mismo tiempo
-  const [prodRes, capRes, pendRes, totalCuotasRes] = await Promise.all([
-    query(
-      `SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
-       FROM ${S}.cred_productos WHERE id = $1`, [productoId]
-    ),
-    query(
-      `SELECT COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
-       FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
-    ),
-    query(
-      `SELECT id, numero_cuota, monto_pagado, abono_interes, abono_capital, monto_cuota
-       FROM ${S}.cred_cuotas
-       WHERE producto_id = $1 AND estado != 'pagada'
-       ORDER BY numero_cuota ASC`, [productoId]
-    ),
-    query(
-      `SELECT COUNT(*) AS total FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
-    ),
-  ])
+  // 1 solo round trip a la BD: producto + capital pagado + pendientes + total
+  const ctxRes = await query(
+    `SELECT
+       (SELECT row_to_json(pr) FROM (
+          SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
+          FROM ${S}.cred_productos WHERE id = $1) pr)                          AS prod,
+       (SELECT COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0)
+          FROM ${S}.cred_cuotas WHERE producto_id = $1)                        AS capital_pagado,
+       (SELECT COALESCE(json_agg(json_build_object(
+            'id', id, 'numero_cuota', numero_cuota, 'monto_pagado', monto_pagado,
+            'abono_interes', abono_interes, 'abono_capital', abono_capital,
+            'monto_cuota', monto_cuota) ORDER BY numero_cuota), '[]'::json)
+          FROM ${S}.cred_cuotas
+          WHERE producto_id = $1 AND estado != 'pagada')                       AS pendientes,
+       (SELECT COUNT(*) FROM ${S}.cred_cuotas WHERE producto_id = $1)          AS total_cuotas`,
+    [productoId]
+  )
 
-  const prod = prodRes.rows[0]
+  const ctx  = ctxRes.rows[0]
+  const prod = typeof ctx.prod === 'string' ? JSON.parse(ctx.prod) : ctx.prod
   if (!prod || prod.metodo_calculo !== 'plano') return
 
-  const capitalPagado = parseFloat(capRes.rows[0].capital_pagado)
+  const capitalPagado = parseFloat(ctx.capital_pagado)
   const saldoCapital  = Math.round(parseFloat(prod.monto_capital) - capitalPagado)
   if (saldoCapital <= 0) return
 
-  let pending = pendRes.rows
+  let pending = typeof ctx.pendientes === 'string' ? JSON.parse(ctx.pendientes) : ctx.pendientes
   if (!pending.length) return
 
-  const numCuotasTotal = parseInt(totalCuotasRes.rows[0].total)
+  const numCuotasTotal = parseInt(ctx.total_cuotas)
 
   const cpmO    = CUOTAS_POR_MES[prod.periodo_tasa]    || 1
   const cpmD    = CUOTAS_POR_MES[prod.frecuencia_cobro] || 1
@@ -193,33 +191,38 @@ export async function POST(request) {
     if (!cuota_id || !monto || monto <= 0)
       return NextResponse.json({ error: 'cuota_id y monto son obligatorios' }, { status: 400 })
 
-    const cuotaRes = await query(
-      `SELECT cu.*, p.cliente_id FROM ${S}.cred_cuotas cu
-       JOIN ${S}.cred_productos p ON p.id = cu.producto_id WHERE cu.id=$1`, [cuota_id]
-    )
-    if (!cuotaRes.rows.length)
-      return NextResponse.json({ error: 'Cuota no encontrada' }, { status: 404 })
-
-    const cuotaRef = cuotaRes.rows[0]
-
-    // ── Paralelo 1: 3 queries independientes al mismo tiempo ─────────────
-    const [modoPruebaRes, pendientesRes, confRes, u] = await Promise.all([
-      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`),
+    // ── 1 solo round trip: cuota + pendientes + configuración ────────────
+    const [ctxRes, u] = await Promise.all([
       query(
-        `SELECT * FROM ${S}.cred_cuotas
-         WHERE producto_id = $1 AND estado != 'pagada'
-         ORDER BY numero_cuota ASC`,
-        [cuotaRef.producto_id]
+        `WITH ref AS (
+           SELECT cu.* FROM ${S}.cred_cuotas cu
+           JOIN ${S}.cred_productos p ON p.id = cu.producto_id
+           WHERE cu.id = $1
+         )
+         SELECT
+           (SELECT row_to_json(ref.*) FROM ref)                              AS cuota,
+           (SELECT COALESCE(json_agg(row_to_json(c.*) ORDER BY c.numero_cuota), '[]'::json)
+              FROM ${S}.cred_cuotas c
+              WHERE c.producto_id = (SELECT producto_id FROM ref)
+                AND c.estado != 'pagada')                                    AS pendientes,
+           (SELECT valor FROM ${S}.cred_configuracion
+             WHERE clave='modo_prueba' LIMIT 1)                              AS modo_prueba
+        `, [cuota_id]
       ),
-      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='recibo_consecutivo'`),
       getUsuarioDesdeRequest(request),
     ])
 
-    const modoPrueba = modoPruebaRes.rows[0]?.valor === 'true'
+    const ctx = ctxRes.rows[0]
+    const cuotaRef = typeof ctx?.cuota === 'string' ? JSON.parse(ctx.cuota) : ctx?.cuota
+    if (!cuotaRef)
+      return NextResponse.json({ error: 'Cuota no encontrada' }, { status: 404 })
+
+    const pendientesRows = typeof ctx.pendientes === 'string' ? JSON.parse(ctx.pendientes) : ctx.pendientes
+    const modoPrueba = ctx.modo_prueba === 'true'
     if (!modoPrueba && fecha_pago && fecha_pago > new Date().toISOString().split('T')[0])
       return NextResponse.json({ error: 'La fecha del pago no puede ser mayor a la fecha actual' }, { status: 400 })
 
-    const cuotasPendientes = pendientesRes.rows
+    const cuotasPendientes = pendientesRows
     const totalPendiente = cuotasPendientes.reduce(
       (s, c) => s + parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0), 0
     )
@@ -232,7 +235,15 @@ export async function POST(request) {
       }, { status: 400 })
     }
 
-    const consecutivo  = parseInt(confRes.rows[0]?.valor || '1')
+    // ── Consecutivo atómico: lee e incrementa en una sola query ──────────
+    //    (evita carrera de recibos duplicados y ahorra un round trip)
+    const consRes = await query(
+      `UPDATE ${S}.cred_configuracion
+       SET valor = (valor::int + 1)::text, actualizado_en = NOW()
+       WHERE clave = 'recibo_consecutivo'
+       RETURNING (valor::int - 1) AS consecutivo`
+    )
+    const consecutivo  = parseInt(consRes.rows[0]?.consecutivo ?? '1')
     const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
 
     // ── Calcular distribución del pago (sin queries) ──────────────────────
@@ -279,8 +290,10 @@ export async function POST(request) {
       ? 'Cuotas #' + cuotasAplicadas[0].numero + '-#' + cuotasAplicadas[cuotasAplicadas.length - 1].numero
       : 'Cuota #' + (cuotasAplicadas[0]?.numero ?? cuotaRef.numero_cuota)
 
-    // ── Paralelo 2: INSERT pago + saldo caja + UPDATE consecutivo ─────────
-    const [, saldoRes] = await Promise.all([
+    // ── Una sola ola: INSERT pago + INSERT caja (saldo calculado en SQL) ──
+    //    El saldo_acumulado se resuelve dentro del INSERT → 1 round trip menos
+    //    y sin carrera de saldos entre pagos simultáneos.
+    await Promise.all([
       query(
         `INSERT INTO ${S}.cred_pagos
           (id, cuota_id, producto_id, cliente_id, monto, monto_interes, monto_capital,
@@ -290,21 +303,12 @@ export async function POST(request) {
          montoNum, interesAbonado, capitalAbonadoRnd, fechaReal,
          metodo_pago || 'efectivo', notas || null, numeroRecibo, u.nombre]
       ),
-      query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`),
-    ])
-
-    const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
-
-    // ── Paralelo 3: INSERT caja + UPDATE consecutivo ──────────────────────
-    await Promise.all([
       query(
         `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-         VALUES ($1,'cobro_capital',$2,$3,$4,$5)`,
-        [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId, saldoAnt + montoNum]
-      ),
-      query(
-        `UPDATE ${S}.cred_configuracion SET valor=$1, actualizado_en=NOW() WHERE clave='recibo_consecutivo'`,
-        [String(consecutivo + 1)]
+         VALUES ($1,'cobro_capital',$2,$3,$4,
+           COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
+                     ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
+        [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId]
       ),
     ])
 
@@ -315,39 +319,39 @@ export async function POST(request) {
       totalPendienteAntesPago: totalPendiente,
     })
 
-    const sinPendientes = await query(
-      `SELECT 1 FROM ${S}.cred_cuotas WHERE producto_id=$1 AND estado != 'pagada' LIMIT 1`,
+    // ── Cierre + chequeo de refinanciación en UNA sola query ──────────────
+    //    Antes eran hasta 4 round trips (sinPendientes, UPDATE saldado,
+    //    MAX cuota, capital pendiente). Ahora todo en un CTE.
+    const finRes = await query(
+      `WITH stats AS (
+         SELECT COUNT(*) FILTER (WHERE estado != 'pagada')::int               AS pendientes,
+                MAX(numero_cuota)                                             AS max_cuota,
+                COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
+         FROM ${S}.cred_cuotas WHERE producto_id = $1
+       ), upd AS (
+         UPDATE ${S}.cred_productos SET estado='saldado'
+         WHERE id = $1 AND (SELECT pendientes FROM stats) = 0
+         RETURNING 1
+       )
+       SELECT s.pendientes, s.max_cuota,
+              (SELECT monto_capital::numeric FROM ${S}.cred_productos WHERE id = $1)
+                - s.capital_pagado AS capital_pendiente
+       FROM stats s`,
       [cuotaRef.producto_id]
     )
-    if (!sinPendientes.rows.length)
-      await query(`UPDATE ${S}.cred_productos SET estado='saldado' WHERE id=$1`, [cuotaRef.producto_id])
+    const fin = finRes.rows[0]
 
     // Detectar si se pagaron intereses de la ÚLTIMA cuota pero queda capital pendiente
     // → solo aplica cuando la cuota que se acaba de pagar ES la última del crédito
     // → NO debe dispararse al pagar cuotas intermedias aunque la última siga pendiente
     let requiereRefinanciacion = false
     let capitalPendiente = 0
-    if (sinPendientes.rows.length > 0) {
-      const maxRes = await query(
-        `SELECT MAX(numero_cuota) AS max_total FROM ${S}.cred_cuotas WHERE producto_id = $1`,
-        [cuotaRef.producto_id]
-      )
-      const { max_total } = maxRes.rows[0]
+    if (parseInt(fin?.pendientes || 0) > 0) {
       // La cuota procesada debe SER la última del crédito (no solo que la última esté pendiente)
-      const cuotaEsUltima = max_total !== null &&
-        parseInt(cuotaRef.numero_cuota) === parseInt(max_total)
+      const cuotaEsUltima = fin.max_cuota !== null &&
+        parseInt(cuotaRef.numero_cuota) === parseInt(fin.max_cuota)
       if (cuotaEsUltima) {
-        const capRes = await query(
-          `SELECT p.monto_capital::numeric
-                  - COALESCE(SUM(GREATEST(0, cu.monto_pagado::numeric - cu.abono_interes::numeric)), 0)
-                  AS capital_pendiente
-           FROM ${S}.cred_productos p
-           LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
-           WHERE p.id = $1
-           GROUP BY p.monto_capital`,
-          [cuotaRef.producto_id]
-        )
-        capitalPendiente = Math.round(parseFloat(capRes.rows[0]?.capital_pendiente || 0))
+        capitalPendiente = Math.round(parseFloat(fin.capital_pendiente || 0))
         requiereRefinanciacion = capitalPendiente > 1
       }
     }

@@ -53,15 +53,16 @@ export async function POST(request) {
     if (!cliente_id || !tipo || !monto_capital)
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 })
 
-    const confRef = await query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='credito_consecutivo'`)
-    const numRef  = parseInt(confRef.rows[0]?.valor || '1')
+    // Consecutivo atómico: lee e incrementa en una sola query
+    // (sin carrera de referencias duplicadas y un round trip menos)
+    const confRef = await query(
+      `UPDATE ${S}.cred_configuracion
+       SET valor = (valor::int + 1)::text
+       WHERE clave = 'credito_consecutivo'
+       RETURNING (valor::int - 1) AS num`
+    )
+    const numRef  = parseInt(confRef.rows[0]?.num ?? '1')
     const referencia = 'CRED-' + String(numRef).padStart(6, '0')
-
-    // Incrementar consecutivo sin esperar — no bloquea el flujo principal
-    query(
-      `UPDATE ${S}.cred_configuracion SET valor=$1 WHERE clave='credito_consecutivo'`,
-      [String(numRef + 1)]
-    ).catch(err => console.error('[consecutivo]', err.message))
 
     if (tipo === 'fiado' || tipo === 'adelanto') {
       const id = uuidv4()
@@ -145,28 +146,25 @@ export async function POST(request) {
         c.abono_capital,c.saldo_pendiente,c.monto_pagado,c.estado
       ])
 
-      // Insertar cuotas y consultar saldo de caja — en paralelo
-      const [, saldoRes] = await Promise.all([
+      const interesTotal = cuotas.reduce((s, c) => s + (c.abono_interes || 0), 0)
+      const totalAPagar  = cuotas.reduce((s, c) => s + (c.monto_cuota  || 0), 0)
+      const montoPrimera = cuotas[0]?.monto_cuota || 0
+
+      // Una sola ola: cuotas + caja (saldo calculado en SQL) + historial
+      // → 2 round trips menos que la versión anterior
+      await Promise.all([
         query(
           `INSERT INTO ${S}.cred_cuotas
            (id,producto_id,cliente_id,numero_cuota,fecha_vencimiento,monto_cuota,
             abono_interes,abono_capital,saldo_pendiente,monto_pagado,estado)
            VALUES ${vals}`, params
         ),
-        query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`),
-      ])
-
-      const saldoAnt    = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
-      const interesTotal = cuotas.reduce((s, c) => s + (c.abono_interes || 0), 0)
-      const totalAPagar  = cuotas.reduce((s, c) => s + (c.monto_cuota  || 0), 0)
-      const montoPrimera = cuotas[0]?.monto_cuota || 0
-
-      // Insertar caja e historial en paralelo; auditoría fire-and-forget
-      await Promise.all([
         query(
           `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-           VALUES ($1,'desembolso',$2,$3,$4,$5)`,
-          [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id, saldoAnt - capitalFinanciar]
+           VALUES ($1,'desembolso',$2,$3,$4,
+             COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
+                       ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
+          [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id]
         ),
         query(
           `INSERT INTO ${S}.cred_historial_recalculos
@@ -181,13 +179,13 @@ export async function POST(request) {
         ),
       ])
     } else {
-      // Sin cuotas (edge case): solo mover caja
-      const saldoRes = await query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`)
-      const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
+      // Sin cuotas (edge case): solo mover caja — saldo calculado en SQL
       await query(
         `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-         VALUES ($1,'desembolso',$2,$3,$4,$5)`,
-        [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id, saldoAnt - capitalFinanciar]
+         VALUES ($1,'desembolso',$2,$3,$4,
+           COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
+                     ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
+        [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id]
       )
     }
 
