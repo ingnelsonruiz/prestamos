@@ -250,12 +250,32 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
   const registrarPago = async () => {
     const montoNum = parseFloat(monto)
     if (!montoNum || montoNum <= 0) { setError('Monto inválido'); return }
+
+    // ── RECOGER CRÉDITO: usa liquidación anticipada para evitar cuotas futuras ──
+    if (tipoPago === 'recoger_credito') {
+      setLoading(true); setError('')
+      const productoId = modal.producto_id
+      const notaLiq = '🏁 Recoger crédito — ' + (notas || '').trim()
+      const res = await fetch(`/api/productos/${productoId}/liquidar`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monto_acordado: montoNum, metodo_pago: metodo, notas: notaLiq.trim(), fecha_pago: fechaPago })
+      })
+      const data = await res.json()
+      setLoading(false)
+      if (!res.ok) { setError(data.error || 'Error al recoger crédito'); return }
+      setRecibo(data.numero_recibo)
+      setModal(null)
+      // Crédito saldado → quitar de la lista
+      setGrupos(prev => prev.filter(g => g.producto_id !== productoId))
+      setHistorialPagos(h => { const n = { ...h }; delete n[productoId]; return n })
+      return
+    }
+
     // Prefijo automático según tipo para historial
     const prefijos = {
       solo_interes:    '💸 Solo intereses — ',
       abono_capital:   '💰 Abono a capital — ',
       personalizado:   '✏️ Monto personalizado — ',
-      recoger_credito: '🏁 Recoger crédito — ',
     }
     const notaFinal = (prefijos[tipoPago] || '') + (notas || '')
     setLoading(true); setError('')
