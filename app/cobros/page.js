@@ -244,44 +244,77 @@ export default function CobrosPage() {
     k === 'manana' ? bucketDe.manana :
     k === 'semana' ? bucketDe.semana : bucketDe.quince
 
-  // Mensaje respetuoso, personalizado y recordando el compromiso de pago
+  // Mensaje respetuoso que lista TODAS las deudas del cliente, agrupadas por crédito
   const buildMensaje = (tramoKey, cl) => {
-    const lineas = cl.cuotas.map(c => {
-      const fv  = new Date(fvDe(c) + 'T12:00:00').toLocaleDateString('es-CO')
-      const cap = capitalPend(c)
-      const int = interesPend(c)
-      const desglose = int > 0 ? `\n    Capital: ${fmt(cap)}  +  Interés: ${fmt(int)}` : ''
-      if (tramoKey === 'mora') {
-        const dias = diasDesde(c)
-        return `  • Cuota #${c.numero_cuota} — venció el ${fv} (${dias} día${dias !== 1 ? 's' : ''} de mora)${desglose}\n    Total a pagar: ${fmt(pendiente(c))}`
+    const fmtFV = c => new Date(fvDe(c) + 'T12:00:00').toLocaleDateString('es-CO')
+    const bloque = p => {
+      const titulo = tipoLabel[p.tipo] || p.tipo
+      const desc   = p.descripcion ? ` — ${p.descripcion}` : ''
+      let ctxt
+      if (p.esTramo) {
+        // Crédito del tramo: solo la(s) cuota(s) a vencer, con capital e interés
+        ctxt = p.cuotas.map(c => {
+          const cap = capitalPend(c), int = interesPend(c)
+          const venc = esMora(c) ? `vencida el ${fmtFV(c)}` : `vence el ${fmtFV(c)}`
+          const desg = int > 0 ? `\n     Capital: ${fmt(cap)}  +  Interés: ${fmt(int)}` : ''
+          return `   - Cuota #${c.numero_cuota} (${venc}): ${fmt(pendiente(c))}${desg}`
+        }).join('\n')
+      } else {
+        // Otros créditos: solo el saldo pendiente, sin enumerar cuotas
+        ctxt = `   - Saldo pendiente: ${fmt(p.subtotal)}`
       }
-      return `  • Cuota #${c.numero_cuota} — vence el ${fv}${desglose}\n    Total a pagar: ${fmt(pendiente(c))}`
-    }).join('\n')
-    const total = fmt(cl.total)
+      return `*${titulo}*${desc}\n${ctxt}\n   Subtotal: ${fmt(p.subtotal)}`
+    }
+    const detalle = cl.productos.map(bloque).join('\n\n')
 
-    if (tramoKey === 'mora')
-      return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. De forma respetuosa le recordamos que a la fecha tiene cuota(s) pendiente(s):\n\n${lineas}\n\n*Total pendiente: ${total}*\n\nConfiamos en su compromiso de ponerse al día. Si ya realizó el pago, por favor ignore este mensaje. Quedamos atentos para cualquier acuerdo. Muchas gracias.`
-    if (tramoKey === 'hoy_solo')
-      return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. Le recordamos amablemente que *hoy* vence su pago:\n\n${lineas}\n\n*Valor a pagar: ${total}*\n\nAgradecemos su cumplimiento y compromiso. Quedamos atentos.`
-    if (tramoKey === 'manana')
-      return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. Un recordatorio cordial: *mañana* vence su pago:\n\n${lineas}\n\n*Valor: ${total}*\n\nLe agradecemos de antemano su puntualidad y compromiso. Gracias.`
-    return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. Le recordamos con respeto su(s) próxima(s) cuota(s):\n\n${lineas}\n\n*Total próximo: ${total}*\n\nGracias por su compromiso de pago. Quedamos atentos ante cualquier inquietud.`
+    const intro = {
+      mora:     'De forma respetuosa le recordamos su estado de cuenta a la fecha:',
+      hoy_solo: 'Le recordamos amablemente su estado de cuenta. *Hoy* tiene un pago programado:',
+      manana:   'Un recordatorio cordial. *Mañana* tiene un pago programado. Este es su estado de cuenta:',
+    }[tramoKey] || 'Le recordamos con respeto su estado de cuenta y próximos pagos:'
+
+    const cierre = tramoKey === 'mora'
+      ? 'Confiamos en su compromiso de ponerse al día. Si ya realizó el pago, por favor ignore este mensaje. Quedamos atentos para cualquier acuerdo. Muchas gracias.'
+      : 'Le agradecemos de antemano su puntualidad y compromiso. Quedamos atentos. Gracias.'
+
+    return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. ${intro}\n\n${detalle}\n\n*Total que debe: ${fmt(cl.total)}*\n\n${cierre}`
   }
 
   const iniciarEnvio = (tramoKey, tramoLabel) => {
     const arr = bucketPorKey(tramoKey)
-    const map = {}
-    arr.forEach(c => {
-      const id = c.cliente_id
-      if (!map[id]) map[id] = { cliente_id: id, nombre: c.nombre_cliente, telefono: c.telefono_cliente, cuotas: [] }
-      map[id].cuotas.push(c)
+    // ¿La cuota cae en el tramo activo?
+    const enTramo = c => {
+      if (!enRuta(c)) return false
+      const fv = fvDe(c)
+      if (tramoKey === 'mora')     return fv <  hoy
+      if (tramoKey === 'hoy_solo') return fv === hoy
+      if (tramoKey === 'manana')   return fv === manana
+      if (tramoKey === 'semana')   return fv >= hoy && fv <= mas7
+      return fv >= hoy && fv <= mas15   // quince
+    }
+    // Clientes que tienen algo en este tramo
+    const ids = [...new Set(arr.map(c => c.cliente_id))]
+    const lista = ids.map(cid => {
+      // TODOS los créditos pendientes de ese cliente, agrupados por producto
+      const gs  = grupos.filter(g => g.cuotas[0]?.cliente_id === cid)
+      const ref = gs[0]
+      const productos = gs.map(g => {
+        const tramoCuotas = g.cuotas.filter(enTramo)
+        const esTramo     = tramoCuotas.length > 0
+        // Crédito del tramo → solo sus cuotas del tramo; otros créditos → todo su saldo
+        const relevantes  = esTramo ? tramoCuotas : g.cuotas
+        return {
+          tipo: g.tipo, descripcion: g.descripcion, esTramo,
+          cuotas: relevantes,
+          subtotal: relevantes.reduce((s, c) => s + pendiente(c), 0),
+        }
+      }).filter(p => p.subtotal > 0.5)
+      const total = productos.reduce((s, p) => s + p.subtotal, 0)
+      const cl = { cliente_id: cid, nombre: ref?.nombre_cliente, telefono: ref?.telefono, productos, total }
+      return { ...cl, mensaje: buildMensaje(tramoKey, cl) }
     })
-    const lista = Object.values(map)
-      .map(cl => {
-        const full = { ...cl, total: cl.cuotas.reduce((s, c) => s + pendiente(c), 0) }
-        return { ...full, mensaje: buildMensaje(tramoKey, full) }
-      })
-      .sort((a, b) => (b.telefono ? 1 : 0) - (a.telefono ? 1 : 0) || (a.nombre || '').localeCompare(b.nombre || ''))
+    .filter(cl => cl.productos.length > 0)
+    .sort((a, b) => (b.telefono ? 1 : 0) - (a.telefono ? 1 : 0) || (a.nombre || '').localeCompare(b.nombre || ''))
     if (lista.length === 0) return
     setEnvio({ tramoKey, tramoLabel, lista, idx: 0, enviados: {} })
     setCopiado(false)
