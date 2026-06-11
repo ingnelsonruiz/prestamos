@@ -288,6 +288,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
     if (!res.ok) { setError(data.error); return }
     const nombreCliente = modal.nombre_cliente
     const productoId    = modal.producto_id
+    const clienteId     = modal.cliente_id
     setRecibo(data.numero_recibo)
     setModal(null)
 
@@ -312,7 +313,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
     setHistorialPagos(h => { const n = { ...h }; delete n[productoId]; return n })
     fetchHistorial(productoId)
     if (data.requiere_refinanciacion && data.capital_pendiente > 0) {
-      setAlertaRefinanciar({ productoId, capitalPendiente: data.capital_pendiente, nombreCliente })
+      setAlertaRefinanciar({ productoId, clienteId, capitalPendiente: data.capital_pendiente, nombreCliente })
     }
   }
 
@@ -1279,34 +1280,62 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
 
     {/* ── Modal: crédito requiere refinanciación ── */}
     {alertaRefinanciar && (
-      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-          <div className="bg-amber-500 px-6 py-4 text-white text-center">
-            <p className="text-3xl mb-1">⚠️</p>
-            <p className="text-lg font-bold">Crédito requiere refinanciación</p>
-          </div>
-          <div className="px-6 py-5 space-y-3 text-sm">
-            <p className="text-gray-700 text-center">
-              <strong>{alertaRefinanciar.nombreCliente}</strong> pagó solo los intereses de la última cuota.
-            </p>
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-center">
-              <p className="text-xs text-gray-500 mb-1">Capital pendiente sin cobrar</p>
-              <p className="text-2xl font-black text-red-600">{fmt(alertaRefinanciar.capitalPendiente)}</p>
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade">
+        <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-pop">
+
+          {/* Header con gradiente y decoración */}
+          <div className="relative bg-gradient-to-br from-violet-600 via-purple-600 to-fuchsia-600 px-6 pt-8 pb-14 text-white text-center overflow-hidden">
+            <div className="absolute -top-10 -right-10 w-36 h-36 rounded-full bg-white/10" />
+            <div className="absolute -bottom-12 -left-8 w-28 h-28 rounded-full bg-white/10" />
+            <div className="absolute top-6 left-8 w-3 h-3 rounded-full bg-white/20" />
+            <div className="relative">
+              <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center text-3xl shadow-inner">
+                🔄
+              </div>
+              <p className="text-xl font-extrabold tracking-tight">Intereses al día</p>
+              <p className="text-white/75 text-xs mt-1">
+                {alertaRefinanciar.nombreCliente} pagó solo los intereses de la última cuota
+              </p>
             </div>
-            <p className="text-gray-500 text-xs text-center">
-              Si no se refinancia, el crédito quedará abierto indefinidamente y afectará los informes y la cartera.
-            </p>
           </div>
-          <div className="px-6 pb-6 flex gap-3">
-            <button onClick={() => setAlertaRefinanciar(null)}
-              className="flex-1 border rounded-xl py-3 text-sm text-gray-600 hover:bg-gray-50">
-              Hacer después
-            </button>
-            <a href={`/prestamos/${alertaRefinanciar.productoId}`}
+
+          {/* Tarjeta de monto superpuesta al header */}
+          <div className="px-6 -mt-9 relative">
+            <div className="bg-white border border-purple-100 rounded-2xl shadow-lg px-4 py-4 text-center">
+              <p className="text-[11px] uppercase tracking-widest text-gray-400 font-bold">Capital pendiente por cobrar</p>
+              <p className="text-3xl font-black bg-gradient-to-r from-violet-700 to-fuchsia-600 bg-clip-text text-transparent mt-1">
+                {fmt(alertaRefinanciar.capitalPendiente)}
+              </p>
+            </div>
+          </div>
+
+          <div className="px-6 pt-4 pb-6 space-y-4">
+            <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-3">
+              <span className="text-base leading-none mt-0.5">💡</span>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                Refinancia ahora y genera el nuevo plan de cuotas <strong>en un solo paso</strong> — el capital
+                ya irá pre-llenado. Si lo dejas para después, el crédito quedará abierto y afectará informes y cartera.
+              </p>
+            </div>
+
+            {/* CTA principal: directo al formulario de refinanciación */}
+            <a href={`/prestamos/nuevo?cliente=${alertaRefinanciar.clienteId}&capital=${Math.round(alertaRefinanciar.capitalPendiente)}&refinancia=${alertaRefinanciar.productoId}`}
               onClick={() => setAlertaRefinanciar(null)}
-              className="flex-1 bg-purple-600 text-white rounded-xl py-3 text-sm font-bold text-center hover:bg-purple-700">
-              🔄 Refinanciar ahora
+              className="block w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white rounded-2xl py-3.5 text-sm font-bold text-center shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 hover:scale-[1.01] active:scale-[0.99] transition-all">
+              🚀 Refinanciar ahora — {fmt(alertaRefinanciar.capitalPendiente)}
             </a>
+
+            <div className="flex gap-3">
+              <button onClick={() => setAlertaRefinanciar(null)}
+                className="flex-1 border border-gray-200 rounded-xl py-2.5 text-xs font-semibold text-gray-500 hover:bg-gray-50 transition-colors">
+                Hacer después
+              </button>
+              <a href={`/prestamos/${alertaRefinanciar.productoId}`}
+                onClick={() => setAlertaRefinanciar(null)}
+                className="flex-1 border border-purple-200 text-purple-600 rounded-xl py-2.5 text-xs font-semibold text-center hover:bg-purple-50 transition-colors">
+                Ver crédito
+              </a>
+            </div>
           </div>
         </div>
       </div>

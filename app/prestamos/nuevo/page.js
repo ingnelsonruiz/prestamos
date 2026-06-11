@@ -234,21 +234,66 @@ function NuevoPrestamoContenido() {
     const data = await res.json()
     setLoading(false)
     if (!res.ok) { setError(data.error); return }
-    router.push('/prestamos')
+    // Refinanciación → ir directo al detalle del nuevo crédito (flujo en 1 paso);
+    // creación normal → volver al listado.
+    router.push(refinanciaId && data.producto?.id ? `/prestamos/${data.producto.id}` : '/prestamos')
   }
 
   const totalPagar  = cuotas.reduce((s,c)=>s+c.monto_cuota,0)
   const totalInteres = cuotas.reduce((s,c)=>s+c.abono_interes,0)
 
+  const clienteRefin = clientes.find(c => c.id === clientePresel)
+
   return (
     <div className="max-w-5xl space-y-6">
-      <h2 className="text-2xl font-bold text-gray-800">
-        {refinanciaId ? '🔄 Refinanciación de saldo' : 'Nuevo préstamo / producto'}
-      </h2>
+      {!refinanciaId && (
+        <h2 className="text-2xl font-bold text-gray-800">Nuevo préstamo / producto</h2>
+      )}
+
+      {/* ── Hero de refinanciación: contexto completo en un vistazo ── */}
       {refinanciaId && (
-        <div className="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2.5 text-sm text-purple-700">
-          Refinanciando saldo pendiente de crédito anterior. El capital ya está pre-llenado — ajusta las condiciones y confirma.
-          {' '}<Link href={`/prestamos/${refinanciaId}`} className="underline">Ver crédito original →</Link>
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-violet-700 via-purple-600 to-fuchsia-600 text-white shadow-lg animate-pop">
+          <div className="absolute -top-12 -right-12 w-44 h-44 rounded-full bg-white/10" />
+          <div className="absolute -bottom-14 left-1/3 w-32 h-32 rounded-full bg-white/10" />
+          <div className="relative px-6 py-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="w-12 h-12 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center text-2xl shrink-0">
+              🔄
+            </div>
+            <div className="flex-1 min-w-[200px]">
+              <p className="text-lg font-extrabold tracking-tight leading-tight">Refinanciación de saldo</p>
+              <p className="text-white/75 text-xs mt-0.5">
+                {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — el capital
+                pendiente ya está pre-llenado. Ajusta tasa, cuotas y fecha, y confirma.
+              </p>
+            </div>
+            {capitalPresel && (
+              <div className="bg-white/15 border border-white/25 rounded-xl px-4 py-2 text-center shrink-0">
+                <p className="text-[10px] uppercase tracking-widest text-white/70 font-bold">Capital a refinanciar</p>
+                <p className="text-xl font-black">{fmt(parseFloat(capitalPresel))}</p>
+              </div>
+            )}
+            <Link href={`/prestamos/${refinanciaId}`}
+              className="text-xs font-semibold bg-white/15 hover:bg-white/25 border border-white/25 rounded-lg px-3 py-2 transition-colors shrink-0">
+              Ver crédito original →
+            </Link>
+          </div>
+          {/* Pasos del flujo */}
+          <div className="relative bg-black/15 px-6 py-2.5 flex items-center gap-2 text-[11px] font-semibold">
+            <span className="flex items-center gap-1.5 text-white/90">
+              <span className="w-4 h-4 rounded-full bg-emerald-400 text-emerald-950 flex items-center justify-center text-[9px]">✓</span>
+              Intereses cobrados
+            </span>
+            <span className="text-white/40">━━</span>
+            <span className="flex items-center gap-1.5 text-white">
+              <span className="w-4 h-4 rounded-full bg-white text-purple-700 flex items-center justify-center text-[9px] font-black">2</span>
+              Nuevas condiciones
+            </span>
+            <span className="text-white/40">━━</span>
+            <span className="flex items-center gap-1.5 text-white/60">
+              <span className="w-4 h-4 rounded-full border border-white/40 flex items-center justify-center text-[9px]">3</span>
+              Crédito generado
+            </span>
+          </div>
         </div>
       )}
       {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">{error}</div>}
@@ -402,8 +447,15 @@ function NuevoPrestamoContenido() {
           </div>
 
           <button type="submit" disabled={loading}
-            className="w-full bg-primary-600 text-white rounded-lg py-2.5 font-medium hover:bg-primary-700 disabled:opacity-50">
-            {loading ? 'Guardando...' : esCuentaAbierta ? `Registrar ${tipoActual?.label ?? 'cuenta abierta'}` : 'Crear y generar cuotas'}
+            className={`w-full text-white rounded-lg py-2.5 font-medium disabled:opacity-50 ${
+              refinanciaId
+                ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all'
+                : 'bg-primary-600 hover:bg-primary-700'
+            }`}>
+            {loading ? 'Guardando...'
+              : refinanciaId ? '🚀 Confirmar refinanciación y generar cuotas'
+              : esCuentaAbierta ? `Registrar ${tipoActual?.label ?? 'cuenta abierta'}`
+              : 'Crear y generar cuotas'}
           </button>
         </form>
 
