@@ -82,13 +82,29 @@ export async function POST(request, { params }) {
     // INSERT pago, cierre de cuotas, UPDATE producto y caja con subquery inline
     const cuotasQueries = recoger_credito
       ? [
-          // Cerrar primera cuota (la que recibió el pago)
+          // Consolida en la primera cuota el saldo TOTAL real que representaba
+          // (cuotas pendientes sumadas). monto_pagado = lo que realmente se cobró.
+          // Esto garantiza que totalEnCuotas === totalEnPagos y elimina la
+          // advertencia de diferencia en el detalle del crédito.
           query(
             `UPDATE ${S}.cred_cuotas
-             SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
-             WHERE id=$1`, [cuotaRef.id]
+             SET estado         = 'pagada',
+                 monto_cuota    = $2,
+                 monto_pagado   = $3,
+                 abono_capital  = $4,
+                 abono_interes  = $5,
+                 saldo_pendiente = 0,
+                 dias_mora      = 0
+             WHERE id = $1`,
+            [
+              cuotaRef.id,
+              Math.round(saldoReal),             // total pendiente real (cuotas fusionadas)
+              Math.round(montoAcordado),          // lo que realmente se cobró
+              Math.round(saldoCapitalPendiente),  // capital pendiente consolidado
+              Math.round(saldoReal - saldoCapitalPendiente), // interés pendiente consolidado
+            ]
           ),
-          // Eliminar cuotas futuras sin ningún pago (excluye la primera)
+          // Eliminar cuotas futuras sin ningún pago (las que se absorben en la primera)
           query(
             `DELETE FROM ${S}.cred_cuotas
              WHERE producto_id=$1 AND id != $2
