@@ -149,7 +149,24 @@ const init = {
   cliente_id:'', tipo:'prestamo', monto_capital:'', tasa_interes:'10',
   periodo_tasa:'mensual', frecuencia_cobro:'mensual', num_cuotas:'4',
   fecha_primer_pago:'', con_interes:true, metodo_calculo:'plano',
-  cuota_inicial:'0', descripcion_bien:'', valor_comercial_bien:'', notas:''
+  cuota_inicial:'0', descripcion_bien:'', valor_comercial_bien:'', notas:'',
+  metodo_desembolso:'efectivo', entidad_desembolso:'', referencia_desembolso:''
+}
+
+// Medios de entrega del dinero + configuración de campos por medio
+const MEDIOS_DESEMBOLSO = [
+  { v:'efectivo',     label:'💵 Efectivo' },
+  { v:'transferencia',label:'🏦 Transferencia bancaria' },
+  { v:'nequi',        label:'📱 Nequi' },
+  { v:'daviplata',    label:'📱 Daviplata' },
+  { v:'llave_breb',   label:'🔑 Llave (Bre-B)' },
+]
+// Etiqueta y placeholder del campo "referencia" según el medio
+const REF_CONFIG = {
+  transferencia:{ pideEntidad:true,  labelRef:'N° de cuenta', phRef:'Ej: 123-456789-00' },
+  nequi:        { pideEntidad:false, labelRef:'N° de celular', phRef:'Ej: 3001234567' },
+  daviplata:    { pideEntidad:false, labelRef:'N° de celular', phRef:'Ej: 3001234567' },
+  llave_breb:   { pideEntidad:false, labelRef:'Llave Bre-B',   phRef:'Celular, cédula, correo o @alfanumérica' },
 }
 
 function NuevoPrestamoContenido() {
@@ -217,7 +234,17 @@ function NuevoPrestamoContenido() {
 
   const guardar = async e => {
     e.preventDefault()
+    // Validación del medio de desembolso
+    if (form.metodo_desembolso !== 'efectivo' && !form.referencia_desembolso?.trim()) {
+      setError(`Indica el ${REF_CONFIG[form.metodo_desembolso]?.labelRef?.toLowerCase() || 'dato del destino'} del desembolso`)
+      return
+    }
     setLoading(true); setError('')
+    // Entidad implícita para billeteras (Nequi/Daviplata)
+    const entidadFinal = form.metodo_desembolso === 'nequi' ? 'Nequi'
+      : form.metodo_desembolso === 'daviplata' ? 'Daviplata'
+      : form.metodo_desembolso === 'transferencia' ? (form.entidad_desembolso || null)
+      : null
     const res = await fetch('/api/productos',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -229,6 +256,7 @@ function NuevoPrestamoContenido() {
         cuota_inicial:        parseFloat(form.cuota_inicial||0),
         valor_comercial_bien: parseFloat(form.valor_comercial_bien||0)||null,
         es_refinanciacion_de: refinanciaId || null,
+        entidad_desembolso:   entidadFinal,
       })
     })
     const data = await res.json()
@@ -444,6 +472,52 @@ function NuevoPrestamoContenido() {
                 </div>
               </>
             )}
+
+            {/* ── Forma de entrega del dinero (desembolso) ── */}
+            <div className="col-span-2 border-t pt-4 mt-1 space-y-3">
+              <p className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                💸 ¿Cómo se entregó el dinero?
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className={form.metodo_desembolso === 'efectivo' ? 'col-span-2' : ''}>
+                  <label className="text-xs font-medium text-gray-600">Medio de pago</label>
+                  <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    value={form.metodo_desembolso}
+                    onChange={e=>{ set('metodo_desembolso', e.target.value); set('entidad_desembolso',''); set('referencia_desembolso','') }}>
+                    {MEDIOS_DESEMBOLSO.map(m => <option key={m.v} value={m.v}>{m.label}</option>)}
+                  </select>
+                </div>
+
+                {/* Banco — solo transferencia */}
+                {form.metodo_desembolso === 'transferencia' && (
+                  <div>
+                    <label className="text-xs font-medium text-gray-600">Banco / entidad</label>
+                    <input type="text" placeholder="Ej: Bancolombia, Davivienda..."
+                      className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                      value={form.entidad_desembolso} onChange={e=>set('entidad_desembolso',e.target.value)} />
+                  </div>
+                )}
+
+                {/* Referencia destino — todos menos efectivo */}
+                {form.metodo_desembolso !== 'efectivo' && (
+                  <div className={form.metodo_desembolso === 'transferencia' ? '' : 'col-span-2'}>
+                    <label className="text-xs font-medium text-gray-600">
+                      {REF_CONFIG[form.metodo_desembolso]?.labelRef} *
+                    </label>
+                    <input type="text"
+                      placeholder={REF_CONFIG[form.metodo_desembolso]?.phRef}
+                      className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                      value={form.referencia_desembolso}
+                      onChange={e=>set('referencia_desembolso',e.target.value)} />
+                    {form.metodo_desembolso === 'llave_breb' && (
+                      <p className="text-[11px] text-gray-400 mt-1">
+                        La llave puede ser el celular, la cédula, el correo o una llave alfanumérica (@).
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <button type="submit" disabled={loading}

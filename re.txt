@@ -1,0 +1,6 @@
+✘ [ERROR] Unterminated string literal
+
+    <stdin>:202:20:
+      202 │               num_cu
+          ╵                     ^
+

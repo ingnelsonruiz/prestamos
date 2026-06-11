@@ -1,0 +1,6 @@
+✘ [ERROR] Unterminated string literal
+
+    <stdin>:202:50:
+      202 │               num_cuotas_total, num_cuotas_antes, 
+          ╵                                                   ^
+

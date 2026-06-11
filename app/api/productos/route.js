@@ -47,11 +47,27 @@ export async function POST(request) {
       frecuencia_cobro, num_cuotas, fecha_primer_pago, con_interes,
       metodo_calculo, cuota_inicial, descripcion_bien,
       valor_comercial_bien, fecha_limite_rescate, notas,
-      es_refinanciacion_de
+      es_refinanciacion_de,
+      metodo_desembolso, entidad_desembolso, referencia_desembolso
     } = body
 
     if (!cliente_id || !tipo || !monto_capital)
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 })
+
+    // ── Normalización del medio de desembolso ───────────────────────────
+    const MEDIOS = ['efectivo','transferencia','nequi','daviplata','llave_breb','otro']
+    const medioDesemb = MEDIOS.includes(metodo_desembolso) ? metodo_desembolso : 'efectivo'
+    // En efectivo no hay entidad ni referencia destino.
+    const entidadDesemb = medioDesemb === 'efectivo' ? null : (entidad_desembolso?.trim() || null)
+    const refDesemb     = medioDesemb === 'efectivo' ? null : (referencia_desembolso?.trim() || null)
+    // Transferencia/Nequi/Daviplata/Llave exigen referencia destino.
+    if (['transferencia','nequi','daviplata','llave_breb'].includes(medioDesemb) && !refDesemb)
+      return NextResponse.json({ error: 'Falta el número de cuenta / celular / llave del desembolso' }, { status: 400 })
+    // Etiqueta legible para el concepto de caja
+    const LABEL_MEDIO = { efectivo:'Efectivo', transferencia:'Transferencia', nequi:'Nequi', daviplata:'Daviplata', llave_breb:'Llave Bre-B', otro:'Otro' }
+    const conceptoMedio = medioDesemb === 'efectivo'
+      ? 'Efectivo'
+      : LABEL_MEDIO[medioDesemb] + (entidadDesemb ? ' ' + entidadDesemb : '') + (refDesemb ? ' -> ' + refDesemb : '')
 
     // Consecutivo de referencia (CRED-XXXXXX) — se incrementa DENTRO de cada
     // transacción: si algo falla, el número no se consume (sin saltos).
@@ -75,9 +91,11 @@ export async function POST(request) {
         const prod = await q(
           `INSERT INTO ${S}.cred_productos
             (id,referencia,cliente_id,tipo,monto_capital,tasa_interes,num_cuotas,
-             fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas)
-           VALUES ($1,$2,$3,$4,$5,0,1,$6,false,'plano',$7,$8) RETURNING *`,
-          [id, referencia, cliente_id, tipo, capital, fechaUso, descripcion_bien||null, notas||null]
+             fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas,
+             metodo_desembolso,entidad_desembolso,referencia_desembolso)
+           VALUES ($1,$2,$3,$4,$5,0,1,$6,false,'plano',$7,$8,$9,$10,$11) RETURNING *`,
+          [id, referencia, cliente_id, tipo, capital, fechaUso, descripcion_bien||null, notas||null,
+           medioDesemb, entidadDesemb, refDesemb]
         )
         await q(
           `INSERT INTO ${S}.cred_cuotas
@@ -92,7 +110,7 @@ export async function POST(request) {
       // Auditoría fire-and-forget
       auditar({ ...u, accion: ACCIONES.CREAR_PRESTAMO, modulo: MODULOS.PRESTAMOS,
         descripcion: `Creo ${tipo}: $${capital.toLocaleString()} — cliente ${cliente_id}`,
-        detalle: { id, tipo, monto: capital, cliente_id } })
+        detalle: { id, tipo, monto: capital, cliente_id, metodo_desembolso: medioDesemb } })
         .catch(err => console.error('[auditoría]', err.message))
 
       return NextResponse.json({ producto: prodRow, cuotas_generadas: 1 }, { status: 201 })
@@ -119,15 +137,17 @@ export async function POST(request) {
           id,referencia,cliente_id,tipo,monto_capital,tasa_interes,periodo_tasa,
           frecuencia_cobro,num_cuotas,fecha_primer_pago,con_interes,
           metodo_calculo,cuota_inicial,descripcion_bien,
-          valor_comercial_bien,fecha_limite_rescate,notas,es_refinanciacion_de
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+          valor_comercial_bien,fecha_limite_rescate,notas,es_refinanciacion_de,
+          metodo_desembolso,entidad_desembolso,referencia_desembolso
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
         [id, referencia, cliente_id, tipo, capitalFinanciar,
          tasa_interes||0, periodo_tasa||'mensual',
          frecuencia_cobro||'mensual', num_cuotas, fecha_primer_pago,
          con_interes !== false, metodo_calculo||'plano',
          cuota_inicial||0, descripcion_bien||null,
          valor_comercial_bien||null, fecha_limite_rescate||null, notas||null,
-         es_refinanciacion_de||null]
+         es_refinanciacion_de||null,
+         medioDesemb, entidadDesemb, refDesemb]
       )
 
       if (es_refinanciacion_de) {
@@ -172,7 +192,7 @@ export async function POST(request) {
            VALUES ($1,'desembolso',$2,$3,$4,
              COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
                        ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
-          [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id]
+          [uuidv4(), -capitalFinanciar, 'Desembolso (' + conceptoMedio + ') — ' + cliente_id, id]
         )
         await q(
           `INSERT INTO ${S}.cred_historial_recalculos
@@ -192,7 +212,7 @@ export async function POST(request) {
            VALUES ($1,'desembolso',$2,$3,$4,
              COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
                        ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
-          [uuidv4(), -capitalFinanciar, 'Desembolso — ' + cliente_id, id]
+          [uuidv4(), -capitalFinanciar, 'Desembolso (' + conceptoMedio + ') — ' + cliente_id, id]
         )
       }
 
@@ -203,7 +223,7 @@ export async function POST(request) {
     const accion = es_refinanciacion_de ? ACCIONES.REFINANCIAR : ACCIONES.CREAR_PRESTAMO
     auditar({ ...u, accion, modulo: MODULOS.PRESTAMOS,
       descripcion: (es_refinanciacion_de ? 'Refinancio' : 'Creo') + ' ' + tipo + ': $' + capitalFinanciar.toLocaleString() + ' — cliente ' + cliente_id,
-      detalle: { id, tipo, monto: capitalFinanciar, cliente_id, es_refinanciacion_de } })
+      detalle: { id, tipo, monto: capitalFinanciar, cliente_id, es_refinanciacion_de, metodo_desembolso: medioDesemb } })
       .catch(err => console.error('[auditoría]', err.message))
 
     return NextResponse.json({ producto: prodRow, cuotas_generadas: cuotas.length }, { status: 201 })
