@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { query } from '@/lib/db'
+import { query, withTransaction } from '@/lib/db'
 import { v4 as uuidv4 } from 'uuid'
 import { auditar, getUsuarioDesdeRequest, ACCIONES, MODULOS } from '@/lib/auditoria'
 
@@ -68,88 +68,111 @@ export async function POST(request, { params }) {
     const fechaReal = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()
     const notaPago  = `LIQUIDACIÓN ANTICIPADA${notas ? ' — ' + notas : ''}${descuento > 0 ? ` | Descuento aplicado: ${new Intl.NumberFormat('es-CO').format(descuento)}` : ''}`
 
-    // ── RTT 2: consecutivo atómico — evita race condition y un round trip ─
-    const consRes = await query(
-      `UPDATE ${S}.cred_configuracion
-       SET valor = (valor::int + 1)::text, actualizado_en = NOW()
-       WHERE clave = 'recibo_consecutivo'
-       RETURNING (valor::int - 1) AS consecutivo`
-    )
-    const consecutivo  = parseInt(consRes.rows[0]?.consecutivo ?? '1')
-    const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
+    // ── Cierre de cuotas COHERENTE con el historial de pagos ──────────────
+    // Aplica IGUAL para "recoger crédito" y "liquidar", sin importar en qué
+    // cuota del plan ocurra la liquidación:
+    //   1. La cuota de referencia (primera pendiente) consolida TODO lo cobrado
+    //      en esta operación: lo que ya tenía abonado + el monto acordado.
+    //      abono_capital = capital ya pagado en esa cuota + capital pendiente total.
+    //      abono_interes = el resto (interés realmente cobrado; el futuro se perdona).
+    //   2. Las demás cuotas con pagos parciales se cierran por lo REALMENTE pagado
+    //      (monto_cuota = monto_pagado, capital/interés prorrateados).
+    //   3. Las cuotas sin ningún pago se ELIMINAN (su capital quedó absorbido
+    //      en la cuota de referencia).
+    // Resultado: Σ monto_pagado de cuotas === Σ pagos del historial (diff = 0)
+    // y no quedan cuotas futuras "pagadas" con dinero que nunca entró.
+    //
+    // IMPORTANTE: estas queries se ejecutan EN SECUENCIA. Antes iban dentro de
+    // Promise.all y el UPDATE de cierre podía ejecutarse antes que el DELETE
+    // (race condition del pool): la cuota futura quedaba marcada 'pagada' y el
+    // DELETE ya no la encontraba → tabla incoherente e indicadores inflados.
 
-    // ── RTT 3: todo en paralelo ───────────────────────────────────────────
-    // INSERT pago, cierre de cuotas, UPDATE producto y caja con subquery inline
-    const cuotasQueries = recoger_credito
-      ? [
-          // Consolida en la primera cuota exactamente lo que se cobró:
-          //   capital pendiente total + interés del período vigente únicamente.
-          // Los intereses futuros NO se incluyen — se perdonan al recoger.
-          // Regla: monto_cuota = montoAcordado (lo pactado), no saldoReal.
-          // Esto garantiza que abono_interes refleje solo el período actual
-          // y que totalEnCuotas === totalEnPagos (diff = 0 en el detalle).
-          query(
-            `UPDATE ${S}.cred_cuotas
-             SET estado          = 'pagada',
-                 monto_cuota     = $2,
-                 monto_pagado    = $2,
-                 abono_capital   = $3,
-                 abono_interes   = $4,
-                 saldo_pendiente = 0,
-                 dias_mora       = 0
-             WHERE id = $1`,
-            [
-              cuotaRef.id,
-              Math.round(montoAcordado),                               // capital + interés período vigente
-              Math.round(saldoCapitalPendiente),                       // capital total pendiente
-              Math.round(montoAcordado - saldoCapitalPendiente),       // solo interés del período actual
-            ]
-          ),
-          // Eliminar cuotas futuras sin ningún pago (las que se absorben en la primera)
-          query(
-            `DELETE FROM ${S}.cred_cuotas
-             WHERE producto_id=$1 AND id != $2
-               AND estado != 'pagada'
-               AND (monto_pagado IS NULL OR monto_pagado = 0)`,
-            [id, cuotaRef.id]
-          ),
-          // Cerrar cuotas parciales restantes (excluye la primera ya cerrada)
-          query(
-            `UPDATE ${S}.cred_cuotas
-             SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
-             WHERE producto_id=$1 AND id != $2 AND estado != 'pagada'`,
-            [id, cuotaRef.id]
-          ),
-        ]
-      : [
-          query(
-            `UPDATE ${S}.cred_cuotas
-             SET estado='pagada', monto_pagado=monto_cuota, dias_mora=0
-             WHERE producto_id=$1 AND estado != 'pagada'`, [id]
-          ),
-        ]
+    const montoCuotaRefOrig    = parseFloat(cuotaRef.monto_cuota || 0)
+    const pagadoPrevioRef      = parseFloat(cuotaRef.monto_pagado || 0)
+    const capitalPrevioRef     = montoCuotaRefOrig > 0
+      ? parseFloat(cuotaRef.abono_capital || 0) * Math.min(1, pagadoPrevioRef / montoCuotaRefOrig)
+      : 0
+    const totalCuotaRef   = Math.round(pagadoPrevioRef + montoAcordado)
+    const capitalCuotaRef = Math.min(totalCuotaRef, Math.round(capitalPrevioRef + saldoCapitalPendiente))
+    const interesCuotaRef = Math.max(0, totalCuotaRef - capitalCuotaRef)
 
-    await Promise.all([
-      query(
+    // ── TRANSACCIÓN: consecutivo + cuotas + pago + producto + caja ────────
+    // Todo o nada: si cualquier paso falla → ROLLBACK (no quedan cuotas
+    // cerradas sin pago, ni caja sin recibo, ni consecutivo consumido).
+    const { numeroRecibo } = await withTransaction(async (q) => {
+
+      // 0. Consecutivo atómico — el UPDATE bloquea la fila hasta el COMMIT,
+      //    serializando liquidaciones concurrentes sin saltos de numeración.
+      const consRes = await q(
+        `UPDATE ${S}.cred_configuracion
+         SET valor = (valor::int + 1)::text, actualizado_en = NOW()
+         WHERE clave = 'recibo_consecutivo'
+         RETURNING (valor::int - 1) AS consecutivo`
+      )
+      const consecutivo = parseInt(consRes.rows[0]?.consecutivo ?? '1')
+      const numRecibo   = 'REC-' + String(consecutivo).padStart(6, '0')
+
+      // 1. Consolidar lo cobrado en la cuota de referencia
+      await q(
+        `UPDATE ${S}.cred_cuotas
+         SET estado          = 'pagada',
+             monto_cuota     = $2,
+             monto_pagado    = $2,
+             abono_capital   = $3,
+             abono_interes   = $4,
+             saldo_pendiente = 0,
+             dias_mora       = 0
+         WHERE id = $1`,
+        [cuotaRef.id, totalCuotaRef, capitalCuotaRef, interesCuotaRef]
+      )
+
+      // 2. Cerrar otras cuotas parciales por lo realmente pagado (prorrateo capital/interés)
+      await q(
+        `UPDATE ${S}.cred_cuotas
+         SET estado          = 'pagada',
+             abono_capital   = ROUND(COALESCE(abono_capital * monto_pagado / NULLIF(monto_cuota, 0), 0)),
+             abono_interes   = monto_pagado - ROUND(COALESCE(abono_capital * monto_pagado / NULLIF(monto_cuota, 0), 0)),
+             monto_cuota     = monto_pagado,
+             saldo_pendiente = 0,
+             dias_mora       = 0
+         WHERE producto_id = $1 AND id != $2 AND estado != 'pagada'
+           AND COALESCE(monto_pagado, 0) > 0`,
+        [id, cuotaRef.id]
+      )
+
+      // 3. Eliminar cuotas futuras sin ningún pago (absorbidas en la cuota de referencia)
+      await q(
+        `DELETE FROM ${S}.cred_cuotas
+         WHERE producto_id = $1 AND id != $2 AND estado != 'pagada'
+           AND COALESCE(monto_pagado, 0) = 0`,
+        [id, cuotaRef.id]
+      )
+
+      // 4. Registrar el pago de la liquidación
+      await q(
         `INSERT INTO ${S}.cred_pagos
           (id, cuota_id, producto_id, cliente_id, monto, fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [pagoId, cuotaRef.id, id, prod.cliente_id,
-         montoAcordado, fechaReal, metodo_pago || 'efectivo', notaPago, numeroRecibo, u.nombre]
-      ),
-      query(`UPDATE ${S}.cred_productos SET estado='saldado' WHERE id=$1`, [id]),
-      // Saldo de caja con subquery inline — elimina SELECT previo
-      query(
+         montoAcordado, fechaReal, metodo_pago || 'efectivo', notaPago, numRecibo, u.nombre]
+      )
+
+      // 5. Saldar el producto
+      await q(`UPDATE ${S}.cred_productos SET estado='saldado' WHERE id=$1`, [id])
+
+      // 6. Movimiento de caja con saldo acumulado (subquery inline)
+      await q(
         `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
          VALUES ($1,'cobro_capital',$2,$3,$4,
            COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
                      ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
         [uuidv4(), montoAcordado,
-         `${numeroRecibo} — Liquidación anticipada ${prod.nombre_cliente}`,
+         `${numRecibo} — Liquidación anticipada ${prod.nombre_cliente}`,
          pagoId]
-      ),
-      ...cuotasQueries,
-    ])
+      )
+
+      return { numeroRecibo: numRecibo }
+    })
 
     // ── Auditoría fire-and-forget — no bloquea la respuesta ───────────────
     auditar({
@@ -157,7 +180,7 @@ export async function POST(request, { params }) {
       accion:      'Liquidación anticipada',
       modulo:      MODULOS.COBROS,
       descripcion: `Liquidó crédito de ${prod.nombre_cliente}: acordado ${new Intl.NumberFormat('es-CO').format(montoAcordado)}, saldo real ${new Intl.NumberFormat('es-CO').format(saldoReal)}, descuento ${new Intl.NumberFormat('es-CO').format(descuento)}`,
-      detalle:     { productoId: id, montoAcordado, saldoReal, descuento, cuotasCerradas: cuotasPendientes.length, numeroRecibo }
+      detalle:     { productoId: id, montoAcordado, saldoReal, descuento, cuotasCerradas: cuotasPendientes.length, numeroRecibo, recogerCredito: !!recoger_credito }
     }).catch(err => console.error('[auditoría liquidar]', err.message))
 
     return NextResponse.json({

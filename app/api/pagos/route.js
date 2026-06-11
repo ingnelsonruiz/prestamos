@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { query } from '@/lib/db'
+import { query, withTransaction } from '@/lib/db'
 import { v4 as uuidv4 } from 'uuid'
 import { auditar, getUsuarioDesdeRequest, ACCIONES, MODULOS } from '@/lib/auditoria'
 
@@ -7,9 +7,11 @@ const S = 'administrativo'
 
 const CUOTAS_POR_MES = { diario: 30, semanal: 4, quincenal: 2, mensual: 1, anual: 1 / 12 }
 
-async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
+// `q` permite ejecutar dentro de una transacción (cliente único del pool);
+// por defecto usa la query global (sin transacción).
+async function recalcularCuotasPlano(productoId, snapshotInfo = null, q = query) {
   // 1 solo round trip a la BD: producto + capital pagado + pendientes + total
-  const ctxRes = await query(
+  const ctxRes = await q(
     `SELECT
        (SELECT row_to_json(pr) FROM (
           SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
@@ -106,7 +108,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
       const aCap    = Math.max(0, mpagado - parseFloat(c.abono_interes || 0))
       return [mpagado, aCap, c.id]
     })
-    await query(
+    await q(
       `UPDATE ${S}.cred_cuotas AS cu
        SET monto_cuota = v.monto_cuota, abono_capital = v.abono_capital,
            saldo_pendiente = 0, estado = 'pagada'
@@ -139,7 +141,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
       return `($${b+1}::numeric,$${b+2}::numeric,$${b+3}::numeric,$${b+4}::numeric,$${b+5}::text,$${b+6}::text)`
     }).join(',')
     const pm2 = batchPend.flatMap(r => [r.newCap, r.newInt, r.newMonto, r.saldo, r.estado, r.id])
-    await query(
+    await q(
       `UPDATE ${S}.cred_cuotas AS cu
        SET abono_capital    = v.abono_capital,
            abono_interes    = v.abono_interes,
@@ -153,7 +155,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
   }
 
   if (debeSnapshot) {
-    await query(
+    await q(
       `INSERT INTO ${S}.cred_historial_recalculos
          (id, producto_id, tipo, capital_original,
           capital_saldo_antes, capital_saldo_despues, capital_abonado,
@@ -235,17 +237,6 @@ export async function POST(request) {
       }, { status: 400 })
     }
 
-    // ── Consecutivo atómico: lee e incrementa en una sola query ──────────
-    //    (evita carrera de recibos duplicados y ahorra un round trip)
-    const consRes = await query(
-      `UPDATE ${S}.cred_configuracion
-       SET valor = (valor::int + 1)::text, actualizado_en = NOW()
-       WHERE clave = 'recibo_consecutivo'
-       RETURNING (valor::int - 1) AS consecutivo`
-    )
-    const consecutivo  = parseInt(consRes.rows[0]?.consecutivo ?? '1')
-    const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
-
     // ── Calcular distribución del pago (sin queries) ──────────────────────
     let restante = montoNum
     let capitalAbonado = 0
@@ -267,21 +258,6 @@ export async function POST(request) {
       restante -= aplicar
     }
 
-    // ── Batch UPDATE: todas las cuotas en una sola query ──────────────────
-    if (batchUpdates.length > 0) {
-      const placeholders = batchUpdates.map((_, i) =>
-        `($${i*3+1}::numeric, $${i*3+2}::text, $${i*3+3}::text)`
-      ).join(',')
-      const params = batchUpdates.flatMap(b => [b.monto_pagado, b.estado, b.id])
-      await query(
-        `UPDATE ${S}.cred_cuotas AS cu
-         SET monto_pagado = v.monto_pagado, estado = v.estado, dias_mora = 0
-         FROM (VALUES ${placeholders}) AS v(monto_pagado, estado, id)
-         WHERE cu.id = v.id`,
-        params
-      )
-    }
-
     const interesAbonado    = Math.round(montoNum - capitalAbonado)
     const capitalAbonadoRnd = Math.round(capitalAbonado)
     const fechaReal  = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()
@@ -290,56 +266,86 @@ export async function POST(request) {
       ? 'Cuotas #' + cuotasAplicadas[0].numero + '-#' + cuotasAplicadas[cuotasAplicadas.length - 1].numero
       : 'Cuota #' + (cuotasAplicadas[0]?.numero ?? cuotaRef.numero_cuota)
 
-    // ── Una sola ola: INSERT pago + INSERT caja (saldo calculado en SQL) ──
-    //    El saldo_acumulado se resuelve dentro del INSERT → 1 round trip menos
-    //    y sin carrera de saldos entre pagos simultáneos.
-    await Promise.all([
-      query(
+    // ── TRANSACCIÓN: consecutivo + cuotas + pago + caja + recálculo ───────
+    // Todo o nada: si cualquier paso falla → ROLLBACK (no quedan cuotas
+    // abonadas sin pago, ni recibo sin movimiento de caja, ni consecutivo
+    // consumido con saltos de numeración).
+    const { numeroRecibo, fin } = await withTransaction(async (q) => {
+
+      // 0. Consecutivo atómico: lee e incrementa en una sola query.
+      //    El bloqueo de fila serializa pagos concurrentes hasta el COMMIT.
+      const consRes = await q(
+        `UPDATE ${S}.cred_configuracion
+         SET valor = (valor::int + 1)::text, actualizado_en = NOW()
+         WHERE clave = 'recibo_consecutivo'
+         RETURNING (valor::int - 1) AS consecutivo`
+      )
+      const consecutivo = parseInt(consRes.rows[0]?.consecutivo ?? '1')
+      const numRecibo   = 'REC-' + String(consecutivo).padStart(6, '0')
+
+      // 1. Batch UPDATE: todas las cuotas en una sola query
+      if (batchUpdates.length > 0) {
+        const placeholders = batchUpdates.map((_, i) =>
+          `($${i*3+1}::numeric, $${i*3+2}::text, $${i*3+3}::text)`
+        ).join(',')
+        const params = batchUpdates.flatMap(b => [b.monto_pagado, b.estado, b.id])
+        await q(
+          `UPDATE ${S}.cred_cuotas AS cu
+           SET monto_pagado = v.monto_pagado, estado = v.estado, dias_mora = 0
+           FROM (VALUES ${placeholders}) AS v(monto_pagado, estado, id)
+           WHERE cu.id = v.id`,
+          params
+        )
+      }
+
+      // 2. INSERT pago + INSERT caja (saldo_acumulado calculado en SQL)
+      await q(
         `INSERT INTO ${S}.cred_pagos
           (id, cuota_id, producto_id, cliente_id, monto, monto_interes, monto_capital,
            fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [pagoId, cuota_id, cuotaRef.producto_id, cuotaRef.cliente_id,
          montoNum, interesAbonado, capitalAbonadoRnd, fechaReal,
-         metodo_pago || 'efectivo', notas || null, numeroRecibo, u.nombre]
-      ),
-      query(
+         metodo_pago || 'efectivo', notas || null, numRecibo, u.nombre]
+      )
+      await q(
         `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
          VALUES ($1,'cobro_capital',$2,$3,$4,
            COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
                      ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
-        [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId]
-      ),
-    ])
+        [uuidv4(), montoNum, numRecibo + ' — ' + cuotasDesc, pagoId]
+      )
 
-    await recalcularCuotasPlano(cuotaRef.producto_id, {
-      pagoId,
-      numeroRecibo,
-      capitalAbonado,
-      totalPendienteAntesPago: totalPendiente,
+      // 3. Recalcular cuotas (método plano) dentro de la misma transacción:
+      //    sus lecturas ven las cuotas ya actualizadas por este mismo cliente.
+      await recalcularCuotasPlano(cuotaRef.producto_id, {
+        pagoId,
+        numeroRecibo: numRecibo,
+        capitalAbonado,
+        totalPendienteAntesPago: totalPendiente,
+      }, q)
+
+      // 4. Cierre + chequeo de refinanciación en UNA sola query (CTE)
+      const finRes = await q(
+        `WITH stats AS (
+           SELECT COUNT(*) FILTER (WHERE estado != 'pagada')::int               AS pendientes,
+                  MAX(numero_cuota)                                             AS max_cuota,
+                  COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
+           FROM ${S}.cred_cuotas WHERE producto_id = $1
+         ), upd AS (
+           UPDATE ${S}.cred_productos SET estado='saldado'
+           WHERE id = $1 AND (SELECT pendientes FROM stats) = 0
+           RETURNING 1
+         )
+         SELECT s.pendientes, s.max_cuota,
+                (SELECT monto_capital::numeric FROM ${S}.cred_productos WHERE id = $1)
+                  - s.capital_pagado AS capital_pendiente
+         FROM stats s`,
+        [cuotaRef.producto_id]
+      )
+
+      return { numeroRecibo: numRecibo, fin: finRes.rows[0] }
     })
-
-    // ── Cierre + chequeo de refinanciación en UNA sola query ──────────────
-    //    Antes eran hasta 4 round trips (sinPendientes, UPDATE saldado,
-    //    MAX cuota, capital pendiente). Ahora todo en un CTE.
-    const finRes = await query(
-      `WITH stats AS (
-         SELECT COUNT(*) FILTER (WHERE estado != 'pagada')::int               AS pendientes,
-                MAX(numero_cuota)                                             AS max_cuota,
-                COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
-         FROM ${S}.cred_cuotas WHERE producto_id = $1
-       ), upd AS (
-         UPDATE ${S}.cred_productos SET estado='saldado'
-         WHERE id = $1 AND (SELECT pendientes FROM stats) = 0
-         RETURNING 1
-       )
-       SELECT s.pendientes, s.max_cuota,
-              (SELECT monto_capital::numeric FROM ${S}.cred_productos WHERE id = $1)
-                - s.capital_pagado AS capital_pendiente
-       FROM stats s`,
-      [cuotaRef.producto_id]
-    )
-    const fin = finRes.rows[0]
 
     // Detectar si se pagaron intereses de la ÚLTIMA cuota pero queda capital pendiente
     // → solo aplica cuando la cuota que se acaba de pagar ES la última del crédito

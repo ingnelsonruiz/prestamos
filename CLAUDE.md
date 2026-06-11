@@ -332,9 +332,10 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 `POST /api/pagos` → actualiza cuota → genera recibo → mueve caja → si sin pendientes → producto `saldado`.
 
 ### Liquidación anticipada
-`POST /api/productos/[id]/liquidar` con `{ monto_acordado, metodo_pago, notas, fecha_pago }`:
+`POST /api/productos/[id]/liquidar` con `{ monto_acordado, metodo_pago, notas, fecha_pago, recoger_credito }`:
 - Valida `monto_acordado >= saldo_capital_pendiente` (no se puede condonar capital).
-- Cierra todas las cuotas pendientes → producto `saldado` → recibo con nota "LIQUIDACIÓN ANTICIPADA".
+- **Cierre coherente con el historial** (sin importar en qué cuota se liquide): la cuota de referencia (primera pendiente) consolida lo realmente cobrado (capital pendiente total + interés del período + abonos previos de esa cuota); las otras cuotas parciales se cierran por lo realmente pagado (capital/interés prorrateados); las cuotas futuras sin pago se ELIMINAN. Garantiza Σ `monto_pagado` de cuotas == Σ pagos.
+- Todo dentro de `withTransaction` (incluido el consecutivo del recibo) → producto `saldado` → recibo con nota "LIQUIDACIÓN ANTICIPADA".
 
 ### Convertir cuenta abierta a préstamo
 Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** → usa el flujo de refinanciación (`es_refinanciacion_de`) → genera nuevo préstamo con cuotas.
@@ -461,6 +462,7 @@ Controlado por `cred_configuracion.clave='modo_prueba'`.
 ## 14. Convenciones de Código
 
 - `const S = 'administrativo'` en todos los Route Handlers.
+- **Transacciones**: toda operación con múltiples escrituras usa `withTransaction(fn)` de `lib/db.js` (BEGIN/COMMIT sobre un mismo cliente del pool, ROLLBACK ante error). Los consecutivos (`recibo_consecutivo`, `credito_consecutivo`) se incrementan DENTRO de la transacción para no consumir números si algo falla. Aplicado en: `POST /api/pagos`, `POST /api/productos`, `POST /api/productos/[id]/liquidar`. NOTA: en modo proxy (`PROXY_URL`) no hay sesión entre llamadas → el helper ejecuta secuencialmente sin atomicidad real.
 - IDs generados con `uuidv4()` en la capa de aplicación.
 - Fechas en **zona horaria local** con `split('-')`.
 - `fecha_primer_pago` de PostgreSQL → convertir a string antes de `generarCuotas()`.
