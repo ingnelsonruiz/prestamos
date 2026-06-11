@@ -82,26 +82,27 @@ export async function POST(request, { params }) {
     // INSERT pago, cierre de cuotas, UPDATE producto y caja con subquery inline
     const cuotasQueries = recoger_credito
       ? [
-          // Consolida en la primera cuota el saldo TOTAL real que representaba
-          // (cuotas pendientes sumadas). monto_pagado = lo que realmente se cobró.
-          // Esto garantiza que totalEnCuotas === totalEnPagos y elimina la
-          // advertencia de diferencia en el detalle del crédito.
+          // Consolida en la primera cuota exactamente lo que se cobró:
+          //   capital pendiente total + interés del período vigente únicamente.
+          // Los intereses futuros NO se incluyen — se perdonan al recoger.
+          // Regla: monto_cuota = montoAcordado (lo pactado), no saldoReal.
+          // Esto garantiza que abono_interes refleje solo el período actual
+          // y que totalEnCuotas === totalEnPagos (diff = 0 en el detalle).
           query(
             `UPDATE ${S}.cred_cuotas
-             SET estado         = 'pagada',
-                 monto_cuota    = $2,
-                 monto_pagado   = $3,
-                 abono_capital  = $4,
-                 abono_interes  = $5,
+             SET estado          = 'pagada',
+                 monto_cuota     = $2,
+                 monto_pagado    = $2,
+                 abono_capital   = $3,
+                 abono_interes   = $4,
                  saldo_pendiente = 0,
-                 dias_mora      = 0
+                 dias_mora       = 0
              WHERE id = $1`,
             [
               cuotaRef.id,
-              Math.round(saldoReal),             // total pendiente real (cuotas fusionadas)
-              Math.round(montoAcordado),          // lo que realmente se cobró
-              Math.round(saldoCapitalPendiente),  // capital pendiente consolidado
-              Math.round(saldoReal - saldoCapitalPendiente), // interés pendiente consolidado
+              Math.round(montoAcordado),                               // capital + interés período vigente
+              Math.round(saldoCapitalPendiente),                       // capital total pendiente
+              Math.round(montoAcordado - saldoCapitalPendiente),       // solo interés del período actual
             ]
           ),
           // Eliminar cuotas futuras sin ningún pago (las que se absorben en la primera)
