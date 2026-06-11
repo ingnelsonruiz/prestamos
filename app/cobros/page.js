@@ -71,23 +71,32 @@ export default function CobrosPage() {
 
   useEffect(() => { cargar() }, [])
 
+  const fetchHistorial = id => {
+    fetch(`/api/historial?producto_id=${id}`)
+      .then(r => r.json())
+      .then(data => {
+        setHistorialPagos(h => ({
+          ...h,
+          [id]: {
+            recalculos:  Array.isArray(data.recalculos)  ? data.recalculos  : [],
+            pagos:       Array.isArray(data.pagos)       ? data.pagos       : [],
+            cuotasTodas: Array.isArray(data.cuotasTodas) ? data.cuotasTodas : [],
+          }
+        }))
+      })
+      .catch(() => {
+        // En caso de error de red, dejar arrays vacíos para no quedar en "Cargando..."
+        setHistorialPagos(h => ({
+          ...h,
+          [id]: { recalculos: [], pagos: [], cuotasTodas: [] }
+        }))
+      })
+  }
+
   const toggle = id => {
     setAbiertos(a => {
       const abierto = !a[id]
-      if (abierto && !historialPagos[id]) {
-        fetch(`/api/historial?producto_id=${id}`)
-          .then(r => r.json())
-          .then(data => {
-            setHistorialPagos(h => ({
-              ...h,
-              [id]: {
-                recalculos:  Array.isArray(data.recalculos)  ? data.recalculos  : [],
-                pagos:       Array.isArray(data.pagos)       ? data.pagos       : [],
-                cuotasTodas: Array.isArray(data.cuotasTodas) ? data.cuotasTodas : [],
-              }
-            }))
-          })
-      }
+      if (abierto && !historialPagos[id]) fetchHistorial(id)
       return { ...a, [id]: abierto }
     })
   }
@@ -272,8 +281,10 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
       // Actualizar solo las cuotas de este grupo
       return prev.map(g => g.producto_id !== productoId ? g : { ...g, cuotas: cuotasActivas })
     })
-    // Forzar re-fetch del historial de este producto al próximo toggle
+    // Re-fetch inmediato del historial: el acordeón puede seguir abierto
+    // (antes solo se borraba y quedaba "Cargando historial..." indefinido)
     setHistorialPagos(h => { const n = { ...h }; delete n[productoId]; return n })
+    fetchHistorial(productoId)
     if (data.requiere_refinanciacion && data.capital_pendiente > 0) {
       setAlertaRefinanciar({ productoId, capitalPendiente: data.capital_pendiente, nombreCliente })
     }
