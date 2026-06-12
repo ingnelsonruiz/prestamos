@@ -81,6 +81,10 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
     // Regla 1: sobrepagadas respecto a la nueva cuota recalculada
     const toMarkOverpaid = pending.filter((c, i) => {
       const isLast   = i === pending.length - 1
+      // NO cerrar la ÚNICA cuota restante mientras quede capital por cobrar.
+      // Esa cuota representa el capital pendiente; cerrarla marcaría el crédito
+      // como 'saldado' sin haber recuperado el capital (debe ir a refinanciación).
+      if (isLast && pending.length === 1 && saldoCapital > 0.5) return false
       const newMonto = isLast ? cuotaBase + cuotaResiduo : cuotaBase
       return parseFloat(c.monto_pagado || 0) >= newMonto
     })
@@ -121,14 +125,37 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
   // Calcular todos los valores en memoria, luego un solo batch UPDATE
   let saldoAcum = saldoCapital
   const batchPend = []
+  // Valores "después" para el snapshot cuando aplica el caso especial de la
+  // última cuota que retiene el capital pendiente (se setea dentro del loop).
+  let overrideSnap = null
   for (let i = 0; i < pending.length; i++) {
-    const c      = pending[i]
-    const isLast = i === pending.length - 1
+    const c        = pending[i]
+    const isLast   = i === pending.length - 1
+    const yaPagado = parseFloat(c.monto_pagado || 0)
+
+    // ── Caso especial: ÚNICA cuota restante con capital pendiente ──
+    // Ocurre al abonar capital (o pagar parcial) sobre la última cuota.
+    // No se redistribuye ni se cierra: la cuota conserva el capital sin cobrar
+    // para que el flujo dispare la refinanciación. No se inventa interés de
+    // períodos futuros: solo se exige el interés del período aún no cubierto.
+    if (isLast && pending.length === 1 && saldoCapital > 0.5) {
+      const periodInt    = Math.round(saldoCapital * tasaPer)
+      const intYaPagado  = Math.min(yaPagado, parseFloat(c.abono_interes || 0))
+      const intPendiente = Math.max(0, periodInt - intYaPagado)
+      const saldoPend    = saldoCapital + intPendiente
+      const newMonto     = yaPagado + saldoPend
+      const newInt       = intYaPagado + intPendiente
+      const newCap       = newMonto - newInt
+      const estado       = yaPagado > 0.5 ? 'parcial' : 'pendiente'
+      batchPend.push({ id: c.id, newCap, newInt, newMonto, saldo: saldoPend, estado })
+      overrideSnap = { interesPendiente: intPendiente, montoCuota: newMonto, totalPendiente: saldoPend }
+      continue
+    }
+
     const newCap   = isLast ? capBase + capResiduo : capBase
     const newMonto = isLast ? cuotaBase + cuotaResiduo : cuotaBase
     const newInt   = newMonto - newCap
     saldoAcum     -= newCap
-    const yaPagado  = parseFloat(c.monto_pagado || 0)
     const saldoPend = Math.max(0, newMonto - yaPagado)
     const nuevoEst  = saldoPend <= 0 ? 'pagada' : yaPagado > 0 ? 'parcial' : 'pendiente'
     batchPend.push({ id: c.id, newCap, newInt, newMonto, saldo: Math.max(0, saldoAcum), estado: nuevoEst })
@@ -154,6 +181,11 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
   }
 
   if (debeSnapshot) {
+    // Si aplicó el caso especial de la última cuota, los valores "después"
+    // reales son los de esa cuota (no los de la redistribución estándar).
+    const snapInteres    = overrideSnap ? overrideSnap.interesPendiente : interesTotal
+    const snapMontoCuota = overrideSnap ? overrideSnap.montoCuota      : cuotaBase
+    const snapTotalPend  = overrideSnap ? overrideSnap.totalPendiente  : totalAPagar
     await query(
       `INSERT INTO ${S}.cred_historial_recalculos
          (id, producto_id, tipo, capital_original,
@@ -171,14 +203,14 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
         saldoCapital,
         capitalAbonado,
         antesInteres,
-        interesTotal,
+        snapInteres,
         numCuotasTotal,
         antesN,
         n,
         antesMontoCuota,
-        cuotaBase,
+        snapMontoCuota,
         antesTotalPendiente,
-        totalAPagar,
+        snapTotalPend,
         snapshotInfo.pagoId,
         snapshotInfo.numeroRecibo,
       ]
@@ -200,8 +232,10 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Cuota no encontrada' }, { status: 404 })
     const cuotaRef = cuotaRes.rows[0]
 
-    // ── Paralelo 1: 3 queries independientes al mismo tiempo ─────────────
-    const [modoPruebaRes, pendientesRes, confRes, u] = await Promise.all([
+    // ── Paralelo 1: queries independientes al mismo tiempo ──────────────
+    // El consecutivo se incrementa atómicamente aquí para evitar recibos duplicados
+    // en pagos concurrentes. El resto de cálculos no cambia.
+    const [modoPruebaRes, pendientesRes, consRes, u] = await Promise.all([
       query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`),
       query(
         `SELECT * FROM ${S}.cred_cuotas
@@ -209,7 +243,12 @@ export async function POST(request) {
          ORDER BY numero_cuota ASC`,
         [cuotaRef.producto_id]
       ),
-      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='recibo_consecutivo'`),
+      query(
+        `UPDATE ${S}.cred_configuracion
+         SET valor = (valor::int + 1)::text, actualizado_en = NOW()
+         WHERE clave = 'recibo_consecutivo'
+         RETURNING (valor::int - 1) AS consecutivo`
+      ),
       getUsuarioDesdeRequest(request),
     ])
 
@@ -230,7 +269,7 @@ export async function POST(request) {
       }, { status: 400 })
     }
 
-    const consecutivo  = parseInt(confRes.rows[0]?.valor || '1')
+    const consecutivo  = parseInt(consRes.rows[0]?.consecutivo ?? '1')
     const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
 
     // ── Calcular distribución del pago (sin queries) ──────────────────────
@@ -293,18 +332,12 @@ export async function POST(request) {
 
     const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
 
-    // ── Paralelo 3: INSERT caja + UPDATE consecutivo ──────────────────────
-    await Promise.all([
-      query(
-        `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-         VALUES ($1,'cobro_capital',$2,$3,$4,$5)`,
-        [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId, saldoAnt + montoNum]
-      ),
-      query(
-        `UPDATE ${S}.cred_configuracion SET valor=$1, actualizado_en=NOW() WHERE clave='recibo_consecutivo'`,
-        [String(consecutivo + 1)]
-      ),
-    ])
+    // ── INSERT caja ───────────────────────────────────────────────────────
+    await query(
+      `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
+       VALUES ($1,'cobro_capital',$2,$3,$4,$5)`,
+      [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId, saldoAnt + montoNum]
+    )
 
     await recalcularCuotasPlano(cuotaRef.producto_id, {
       pagoId,
@@ -334,14 +367,20 @@ export async function POST(request) {
       const cuotaEsUltima = max_total !== null &&
         parseInt(cuotaRef.numero_cuota) === parseInt(max_total)
       if (cuotaEsUltima) {
+        // Capital a refinanciar = capital original - capital REALMENTE cobrado
+        // (incluido el pago actual, ya insertado). Es el saldo de capital que
+        // queda por cobrar — exactamente lo que se debe refinanciar.
+        // Se usa cred_pagos.monto_capital (valor explícito al momento de cada cobro)
+        // en vez de derivarlo de cred_cuotas, porque recalcularCuotasPlano altera
+        // abono_interes y distorsiona el cálculo histórico basado en cuotas.
         const capRes2 = await query(
           `SELECT p.monto_capital::numeric
-                  - COALESCE(SUM(GREATEST(0, cu.monto_pagado::numeric - cu.abono_interes::numeric)), 0)
-                  AS capital_pendiente
-           FROM ${S}.cred_productos p
-           LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
-           WHERE p.id = $1
-           GROUP BY p.monto_capital`,
+                  - COALESCE((
+                      SELECT SUM(pg.monto_capital::numeric)
+                      FROM ${S}.cred_pagos pg
+                      WHERE pg.producto_id = $1
+                    ), 0) AS capital_pendiente
+           FROM ${S}.cred_productos p WHERE p.id = $1`,
           [cuotaRef.producto_id]
         )
         capitalPendiente = Math.round(parseFloat(capRes2.rows[0]?.capital_pendiente || 0))
