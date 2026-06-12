@@ -1,45 +1,44 @@
 import { NextResponse } from 'next/server'
-import { query, withTransaction } from '@/lib/db'
+import { query } from '@/lib/db'
 import { v4 as uuidv4 } from 'uuid'
 import { auditar, getUsuarioDesdeRequest, ACCIONES, MODULOS } from '@/lib/auditoria'
 
 const S = 'administrativo'
-
 const CUOTAS_POR_MES = { diario: 30, semanal: 4, quincenal: 2, mensual: 1, anual: 1 / 12 }
 
-// `q` permite ejecutar dentro de una transacción (cliente único del pool);
-// por defecto usa la query global (sin transacción).
-async function recalcularCuotasPlano(productoId, snapshotInfo = null, q = query) {
-  // 1 solo round trip a la BD: producto + capital pagado + pendientes + total
-  const ctxRes = await q(
-    `SELECT
-       (SELECT row_to_json(pr) FROM (
-          SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
-          FROM ${S}.cred_productos WHERE id = $1) pr)                          AS prod,
-       (SELECT COALESCE(SUM(monto_capital::numeric), 0)
-          FROM ${S}.cred_pagos WHERE producto_id = $1)                         AS capital_pagado,
-       (SELECT COALESCE(json_agg(json_build_object(
-            'id', id, 'numero_cuota', numero_cuota, 'monto_pagado', monto_pagado,
-            'abono_interes', abono_interes, 'abono_capital', abono_capital,
-            'monto_cuota', monto_cuota) ORDER BY numero_cuota), '[]'::json)
-          FROM ${S}.cred_cuotas
-          WHERE producto_id = $1 AND estado != 'pagada')                       AS pendientes,
-       (SELECT COUNT(*) FROM ${S}.cred_cuotas WHERE producto_id = $1)          AS total_cuotas`,
-    [productoId]
-  )
+async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
+  // Paralelo: las 4 queries iniciales al mismo tiempo
+  const [prodRes, capRes, pendRes, totalCuotasRes] = await Promise.all([
+    query(
+      `SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
+       FROM ${S}.cred_productos WHERE id = $1`, [productoId]
+    ),
+    query(
+      `SELECT COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
+       FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
+    ),
+    query(
+      `SELECT id, numero_cuota, monto_pagado, abono_interes, abono_capital, monto_cuota
+       FROM ${S}.cred_cuotas
+       WHERE producto_id = $1 AND estado != 'pagada'
+       ORDER BY numero_cuota ASC`, [productoId]
+    ),
+    query(
+      `SELECT COUNT(*) AS total FROM ${S}.cred_cuotas WHERE producto_id = $1`, [productoId]
+    ),
+  ])
 
-  const ctx  = ctxRes.rows[0]
-  const prod = typeof ctx.prod === 'string' ? JSON.parse(ctx.prod) : ctx.prod
+  const prod = prodRes.rows[0]
   if (!prod || prod.metodo_calculo !== 'plano') return
 
-  const capitalPagado = parseFloat(ctx.capital_pagado)
+  const capitalPagado = parseFloat(capRes.rows[0].capital_pagado)
   const saldoCapital  = Math.round(parseFloat(prod.monto_capital) - capitalPagado)
   if (saldoCapital <= 0) return
 
-  let pending = typeof ctx.pendientes === 'string' ? JSON.parse(ctx.pendientes) : ctx.pendientes
+  let pending = pendRes.rows
   if (!pending.length) return
 
-  const numCuotasTotal = parseInt(ctx.total_cuotas)
+  const numCuotasTotal = parseInt(totalCuotasRes.rows[0].total)
 
   const cpmO    = CUOTAS_POR_MES[prod.periodo_tasa]    || 1
   const cpmD    = CUOTAS_POR_MES[prod.frecuencia_cobro] || 1
@@ -108,7 +107,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null, q = query)
       const aCap    = Math.max(0, mpagado - parseFloat(c.abono_interes || 0))
       return [mpagado, aCap, c.id]
     })
-    await q(
+    await query(
       `UPDATE ${S}.cred_cuotas AS cu
        SET monto_cuota = v.monto_cuota, abono_capital = v.abono_capital,
            saldo_pendiente = 0, estado = 'pagada'
@@ -141,7 +140,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null, q = query)
       return `($${b+1}::numeric,$${b+2}::numeric,$${b+3}::numeric,$${b+4}::numeric,$${b+5}::text,$${b+6}::text)`
     }).join(',')
     const pm2 = batchPend.flatMap(r => [r.newCap, r.newInt, r.newMonto, r.saldo, r.estado, r.id])
-    await q(
+    await query(
       `UPDATE ${S}.cred_cuotas AS cu
        SET abono_capital    = v.abono_capital,
            abono_interes    = v.abono_interes,
@@ -155,7 +154,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null, q = query)
   }
 
   if (debeSnapshot) {
-    await q(
+    await query(
       `INSERT INTO ${S}.cred_historial_recalculos
          (id, producto_id, tipo, capital_original,
           capital_saldo_antes, capital_saldo_despues, capital_abonado,
@@ -193,38 +192,32 @@ export async function POST(request) {
     if (!cuota_id || !monto || monto <= 0)
       return NextResponse.json({ error: 'cuota_id y monto son obligatorios' }, { status: 400 })
 
-    // ── 1 solo round trip: cuota + pendientes + configuración ────────────
-    const [ctxRes, u] = await Promise.all([
+    const cuotaRes = await query(
+      `SELECT cu.*, p.cliente_id FROM ${S}.cred_cuotas cu
+       JOIN ${S}.cred_productos p ON p.id = cu.producto_id WHERE cu.id=$1`, [cuota_id]
+    )
+    if (!cuotaRes.rows.length)
+      return NextResponse.json({ error: 'Cuota no encontrada' }, { status: 404 })
+    const cuotaRef = cuotaRes.rows[0]
+
+    // ── Paralelo 1: 3 queries independientes al mismo tiempo ─────────────
+    const [modoPruebaRes, pendientesRes, confRes, u] = await Promise.all([
+      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`),
       query(
-        `WITH ref AS (
-           SELECT cu.* FROM ${S}.cred_cuotas cu
-           JOIN ${S}.cred_productos p ON p.id = cu.producto_id
-           WHERE cu.id = $1
-         )
-         SELECT
-           (SELECT row_to_json(ref.*) FROM ref)                              AS cuota,
-           (SELECT COALESCE(json_agg(row_to_json(c.*) ORDER BY c.numero_cuota), '[]'::json)
-              FROM ${S}.cred_cuotas c
-              WHERE c.producto_id = (SELECT producto_id FROM ref)
-                AND c.estado != 'pagada')                                    AS pendientes,
-           (SELECT valor FROM ${S}.cred_configuracion
-             WHERE clave='modo_prueba' LIMIT 1)                              AS modo_prueba
-        `, [cuota_id]
+        `SELECT * FROM ${S}.cred_cuotas
+         WHERE producto_id = $1 AND estado != 'pagada'
+         ORDER BY numero_cuota ASC`,
+        [cuotaRef.producto_id]
       ),
+      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='recibo_consecutivo'`),
       getUsuarioDesdeRequest(request),
     ])
 
-    const ctx = ctxRes.rows[0]
-    const cuotaRef = typeof ctx?.cuota === 'string' ? JSON.parse(ctx.cuota) : ctx?.cuota
-    if (!cuotaRef)
-      return NextResponse.json({ error: 'Cuota no encontrada' }, { status: 404 })
-
-    const pendientesRows = typeof ctx.pendientes === 'string' ? JSON.parse(ctx.pendientes) : ctx.pendientes
-    const modoPrueba = ctx.modo_prueba === 'true'
+    const modoPrueba = modoPruebaRes.rows[0]?.valor === 'true'
     if (!modoPrueba && fecha_pago && fecha_pago > new Date().toISOString().split('T')[0])
       return NextResponse.json({ error: 'La fecha del pago no puede ser mayor a la fecha actual' }, { status: 400 })
 
-    const cuotasPendientes = pendientesRows
+    const cuotasPendientes = pendientesRes.rows
     const totalPendiente = cuotasPendientes.reduce(
       (s, c) => s + parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0), 0
     )
@@ -237,14 +230,16 @@ export async function POST(request) {
       }, { status: 400 })
     }
 
+    const consecutivo  = parseInt(confRes.rows[0]?.valor || '1')
+    const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
+
     // ── Calcular distribución del pago (sin queries) ──────────────────────
     let restante = montoNum
     let capitalAbonado = 0
     const cuotasAplicadas = []
-    const batchUpdates = []   // acumular para un solo UPDATE en batch
+    const batchUpdates = []
 
-    for (let i = 0; i < cuotasPendientes.length; i++) {
-      const c = cuotasPendientes[i]
+    for (const c of cuotasPendientes) {
       if (restante <= 0) break
       const saldoC  = parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0)
       const aplicar = Math.min(restante, saldoC)
@@ -257,18 +252,21 @@ export async function POST(request) {
       batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
       cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: aplicar, estado: estadoC })
       restante -= aplicar
-      // Si la cuota quedó pagada y hay sobrante que NO cubre el total restante de cuotas
-      // siguientes, ese sobrante es abono puro a capital: no se distribuye en intereses futuros.
-      if (estadoC === 'pagada' && restante > 0.5) {
-        const totalSiguientes = cuotasPendientes.slice(i + 1).reduce(
-          (s, cx) => s + parseFloat(cx.monto_cuota) - parseFloat(cx.monto_pagado || 0), 0
-        )
-        if (restante < totalSiguientes - 0.5) {
-          capitalAbonado += restante
-          restante = 0
-          break
-        }
-      }
+    }
+
+    // ── Batch UPDATE: todas las cuotas en una sola query ──────────────────
+    if (batchUpdates.length > 0) {
+      const placeholders = batchUpdates.map((_, i) =>
+        `($${i*3+1}::numeric, $${i*3+2}::text, $${i*3+3}::text)`
+      ).join(',')
+      const params = batchUpdates.flatMap(b => [b.monto_pagado, b.estado, b.id])
+      await query(
+        `UPDATE ${S}.cred_cuotas AS cu
+         SET monto_pagado = v.monto_pagado, estado = v.estado, dias_mora = 0
+         FROM (VALUES ${placeholders}) AS v(monto_pagado, estado, id)
+         WHERE cu.id = v.id`,
+        params
+      )
     }
 
     const interesAbonado    = Math.round(montoNum - capitalAbonado)
@@ -279,98 +277,74 @@ export async function POST(request) {
       ? 'Cuotas #' + cuotasAplicadas[0].numero + '-#' + cuotasAplicadas[cuotasAplicadas.length - 1].numero
       : 'Cuota #' + (cuotasAplicadas[0]?.numero ?? cuotaRef.numero_cuota)
 
-    // ── TRANSACCIÓN: consecutivo + cuotas + pago + caja + recálculo ───────
-    // Todo o nada: si cualquier paso falla → ROLLBACK (no quedan cuotas
-    // abonadas sin pago, ni recibo sin movimiento de caja, ni consecutivo
-    // consumido con saltos de numeración).
-    const { numeroRecibo, fin } = await withTransaction(async (q) => {
-
-      // 0. Consecutivo atómico: lee e incrementa en una sola query.
-      //    El bloqueo de fila serializa pagos concurrentes hasta el COMMIT.
-      const consRes = await q(
-        `UPDATE ${S}.cred_configuracion
-         SET valor = (valor::int + 1)::text, actualizado_en = NOW()
-         WHERE clave = 'recibo_consecutivo'
-         RETURNING (valor::int - 1) AS consecutivo`
-      )
-      const consecutivo = parseInt(consRes.rows[0]?.consecutivo ?? '1')
-      const numRecibo   = 'REC-' + String(consecutivo).padStart(6, '0')
-
-      // 1. Batch UPDATE: todas las cuotas en una sola query
-      if (batchUpdates.length > 0) {
-        const placeholders = batchUpdates.map((_, i) =>
-          `($${i*3+1}::numeric, $${i*3+2}::text, $${i*3+3}::text)`
-        ).join(',')
-        const params = batchUpdates.flatMap(b => [b.monto_pagado, b.estado, b.id])
-        await q(
-          `UPDATE ${S}.cred_cuotas AS cu
-           SET monto_pagado = v.monto_pagado, estado = v.estado, dias_mora = 0
-           FROM (VALUES ${placeholders}) AS v(monto_pagado, estado, id)
-           WHERE cu.id = v.id`,
-          params
-        )
-      }
-
-      // 2. INSERT pago + INSERT caja (saldo_acumulado calculado en SQL)
-      await q(
+    // ── Paralelo 2: INSERT pago + saldo caja + UPDATE consecutivo ─────────
+    const [, saldoRes] = await Promise.all([
+      query(
         `INSERT INTO ${S}.cred_pagos
           (id, cuota_id, producto_id, cliente_id, monto, monto_interes, monto_capital,
            fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [pagoId, cuota_id, cuotaRef.producto_id, cuotaRef.cliente_id,
          montoNum, interesAbonado, capitalAbonadoRnd, fechaReal,
-         metodo_pago || 'efectivo', notas || null, numRecibo, u.nombre]
-      )
-      await q(
+         metodo_pago || 'efectivo', notas || null, numeroRecibo, u.nombre]
+      ),
+      query(`SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja ORDER BY fecha DESC LIMIT 1`),
+    ])
+
+    const saldoAnt = parseFloat(saldoRes.rows[0]?.saldo_acumulado || 0)
+
+    // ── Paralelo 3: INSERT caja + UPDATE consecutivo ──────────────────────
+    await Promise.all([
+      query(
         `INSERT INTO ${S}.cred_movimientos_caja (id,tipo,monto,concepto,referencia_id,saldo_acumulado)
-         VALUES ($1,'cobro_capital',$2,$3,$4,
-           COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
-                     ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
-        [uuidv4(), montoNum, numRecibo + ' — ' + cuotasDesc, pagoId]
-      )
+         VALUES ($1,'cobro_capital',$2,$3,$4,$5)`,
+        [uuidv4(), montoNum, numeroRecibo + ' — ' + cuotasDesc, pagoId, saldoAnt + montoNum]
+      ),
+      query(
+        `UPDATE ${S}.cred_configuracion SET valor=$1, actualizado_en=NOW() WHERE clave='recibo_consecutivo'`,
+        [String(consecutivo + 1)]
+      ),
+    ])
 
-      // 3. Recalcular cuotas (método plano) dentro de la misma transacción:
-      //    sus lecturas ven las cuotas ya actualizadas por este mismo cliente.
-      await recalcularCuotasPlano(cuotaRef.producto_id, {
-        pagoId,
-        numeroRecibo: numRecibo,
-        capitalAbonado,
-        totalPendienteAntesPago: totalPendiente,
-      }, q)
-
-      // 4. Cierre + chequeo de refinanciación en UNA sola query (CTE)
-      const finRes = await q(
-        `WITH stats AS (
-           SELECT COUNT(*) FILTER (WHERE estado != 'pagada')::int               AS pendientes,
-                  MAX(numero_cuota)                                             AS max_cuota,
-                  COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
-           FROM ${S}.cred_cuotas WHERE producto_id = $1
-         ), upd AS (
-           UPDATE ${S}.cred_productos SET estado='saldado'
-           WHERE id = $1 AND (SELECT pendientes FROM stats) = 0
-           RETURNING 1
-         )
-         SELECT s.pendientes, s.max_cuota,
-                (SELECT monto_capital::numeric FROM ${S}.cred_productos WHERE id = $1)
-                  - s.capital_pagado AS capital_pendiente
-         FROM stats s`,
-        [cuotaRef.producto_id]
-      )
-
-      return { numeroRecibo: numRecibo, fin: finRes.rows[0] }
+    await recalcularCuotasPlano(cuotaRef.producto_id, {
+      pagoId,
+      numeroRecibo,
+      capitalAbonado,
+      totalPendienteAntesPago: totalPendiente,
     })
+
+    const sinPendientes = await query(
+      `SELECT 1 FROM ${S}.cred_cuotas WHERE producto_id=$1 AND estado != 'pagada' LIMIT 1`,
+      [cuotaRef.producto_id]
+    )
+    if (!sinPendientes.rows.length)
+      await query(`UPDATE ${S}.cred_productos SET estado='saldado' WHERE id=$1`, [cuotaRef.producto_id])
 
     // Detectar si se pagaron intereses de la ÚLTIMA cuota pero queda capital pendiente
     // → solo aplica cuando la cuota que se acaba de pagar ES la última del crédito
     // → NO debe dispararse al pagar cuotas intermedias aunque la última siga pendiente
     let requiereRefinanciacion = false
     let capitalPendiente = 0
-    if (parseInt(fin?.pendientes || 0) > 0) {
-      // La cuota procesada debe SER la última del crédito (no solo que la última esté pendiente)
-      const cuotaEsUltima = fin.max_cuota !== null &&
-        parseInt(cuotaRef.numero_cuota) === parseInt(fin.max_cuota)
+    if (sinPendientes.rows.length > 0) {
+      const maxRes = await query(
+        `SELECT MAX(numero_cuota) AS max_total FROM ${S}.cred_cuotas WHERE producto_id = $1`,
+        [cuotaRef.producto_id]
+      )
+      const { max_total } = maxRes.rows[0]
+      const cuotaEsUltima = max_total !== null &&
+        parseInt(cuotaRef.numero_cuota) === parseInt(max_total)
       if (cuotaEsUltima) {
-        capitalPendiente = Math.round(parseFloat(fin.capital_pendiente || 0))
+        const capRes2 = await query(
+          `SELECT p.monto_capital::numeric
+                  - COALESCE(SUM(GREATEST(0, cu.monto_pagado::numeric - cu.abono_interes::numeric)), 0)
+                  AS capital_pendiente
+           FROM ${S}.cred_productos p
+           LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
+           WHERE p.id = $1
+           GROUP BY p.monto_capital`,
+          [cuotaRef.producto_id]
+        )
+        capitalPendiente = Math.round(parseFloat(capRes2.rows[0]?.capital_pendiente || 0))
         requiereRefinanciacion = capitalPendiente > 1
       }
     }
