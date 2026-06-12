@@ -331,7 +331,18 @@ export async function POST(request) {
         capitalAbonado            = Math.max(0, montoNum - interesEnAplicacion)
         const nuevoP              = yaPagado + montoNum
         const estadoC             = nuevoP >= parseFloat(c.monto_cuota) ? 'pagada' : 'parcial'
-        batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
+        // Si el pago CIERRA la cuota con excedente a capital (monto_pagado >
+        // monto_cuota original), dejar la cuota internamente consistente:
+        // monto_cuota = lo pagado y abono_capital = pagado − interés del período.
+        // Evita que `monto_cuota − monto_pagado` quede NEGATIVO (lo que distorsiona
+        // el "saldo pendiente"/refinanciación del detalle) y que abono_capital
+        // quede corto frente a lo realmente abonado a capital.
+        const cierreConExcedente = estadoC === 'pagada' && nuevoP > parseFloat(c.monto_cuota)
+        batchUpdates.push({
+          id: c.id, monto_pagado: nuevoP, estado: estadoC,
+          monto_cuota:   cierreConExcedente ? nuevoP : null,
+          abono_capital: cierreConExcedente ? (nuevoP - parseFloat(c.abono_interes || 0)) : null,
+        })
         cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: montoNum, estado: estadoC })
       }
     } else {
@@ -349,7 +360,8 @@ export async function POST(request) {
         const interesEnAplicacion = Math.min(aplicar, interesPendiente)
         capitalAbonado += Math.max(0, aplicar - interesEnAplicacion)
         const estadoC = nuevoP >= parseFloat(c.monto_cuota) ? 'pagada' : 'parcial'
-        batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
+        // Francés: cronograma fijo, no se reescriben monto_cuota/abono_capital.
+        batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC, monto_cuota: null, abono_capital: null })
         cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: aplicar, estado: estadoC })
         restante -= aplicar
       }
@@ -357,14 +369,21 @@ export async function POST(request) {
 
     // ── Batch UPDATE: todas las cuotas en una sola query ──────────────────
     if (batchUpdates.length > 0) {
-      const placeholders = batchUpdates.map((_, i) =>
-        `($${i*3+1}::numeric, $${i*3+2}::text, $${i*3+3}::text)`
-      ).join(',')
-      const params = batchUpdates.flatMap(b => [b.monto_pagado, b.estado, b.id])
+      const placeholders = batchUpdates.map((_, i) => {
+        const b = i * 5
+        return `($${b+1}::numeric, $${b+2}::text, $${b+3}::numeric, $${b+4}::numeric, $${b+5}::text)`
+      }).join(',')
+      const params = batchUpdates.flatMap(b => [
+        b.monto_pagado, b.estado, b.monto_cuota ?? null, b.abono_capital ?? null, b.id
+      ])
       await query(
         `UPDATE ${S}.cred_cuotas AS cu
-         SET monto_pagado = v.monto_pagado, estado = v.estado, dias_mora = 0
-         FROM (VALUES ${placeholders}) AS v(monto_pagado, estado, id)
+         SET monto_pagado   = v.monto_pagado,
+             estado         = v.estado,
+             dias_mora      = 0,
+             monto_cuota    = COALESCE(v.monto_cuota, cu.monto_cuota),
+             abono_capital  = COALESCE(v.abono_capital, cu.abono_capital)
+         FROM (VALUES ${placeholders}) AS v(monto_pagado, estado, monto_cuota, abono_capital, id)
          WHERE cu.id = v.id`,
         params
       )

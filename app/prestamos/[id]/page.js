@@ -153,7 +153,9 @@ export default function DetallePrestamo() {
   if (!data)  return <div className="text-gray-400 p-4">Cargando...</div>
 
   const totalPagado          = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_pagado||0), 0) || 0
-  const totalPendiente       = data.cuotas?.reduce((s,c) => s + (parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0)), 0) || 0
+  // Pendiente por cuota nunca negativo: una cuota sobrepagada (monto_pagado >
+  // monto_cuota, por excedente abonado a capital) no debe restar del total.
+  const totalPendiente       = data.cuotas?.reduce((s,c) => s + Math.max(0, parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0)), 0) || 0
   const totalProyectado      = data.cuotas?.reduce((s,c) => s + parseFloat(c.monto_cuota), 0) || 0
   const totalIntereses       = data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0) || 0
   const cuotasPagadas        = data.cuotas?.filter(c => c.estado === 'pagada').length || 0
@@ -164,17 +166,18 @@ export default function DetallePrestamo() {
     const hoyStr = new Date().toISOString().split('T')[0]
     return vence < hoyStr && c.estado !== 'pagada'
   }).length || 0
-  // Saldo SOLO de capital pendiente (sin intereses futuros) — referencia para liquidar
-  // Para cuotas parciales: descuenta proporcionalmente lo ya pagado
+  // Saldo SOLO de capital pendiente (sin intereses futuros) — referencia para liquidar.
+  // Convención del sistema: el pago cubre PRIMERO el interés del período y el resto
+  // baja capital. Por tanto, capital pendiente de una cuota = abono_capital −
+  // (lo ya pagado por encima del interés). NO se prorratea: si el interés ya se
+  // cobró, todo lo que falta es capital puro.
   const saldoCapitalPendiente = data.cuotas?.filter(c => c.estado !== 'pagada')
     .reduce((s,c) => {
-      const montoCuota   = parseFloat(c.monto_cuota || 0)
       const montoPagado  = parseFloat(c.monto_pagado || 0)
       const abonoCapital = parseFloat(c.abono_capital || 0)
-      if (montoCuota <= 0) return s
-      // Proporción que falta por pagar
-      const proporcionPendiente = Math.max(0, (montoCuota - montoPagado) / montoCuota)
-      return s + (abonoCapital * proporcionPendiente)
+      const abonoInteres = parseFloat(c.abono_interes || 0)
+      const capitalPagado = Math.max(0, montoPagado - abonoInteres)  // interés primero
+      return s + Math.max(0, abonoCapital - capitalPagado)
     }, 0) || 0
   const puedeEditar     = !data.tiene_pagos
 
