@@ -1,5 +1,6 @@
 'use client'
 import { useState, useRef, useEffect } from 'react'
+import Link from 'next/link'
 import * as XLSX from 'xlsx'
 
 function ToggleModoPrueba() {
@@ -340,6 +341,21 @@ export default function MigracionPage() {
         <h2 className="text-2xl font-bold text-gray-800">📦 Migración masiva</h2>
         <p className="text-sm text-gray-500 mt-1">Importa clientes y saldos desde cuadernos o Excel en pocos pasos</p>
       </div>
+
+      {/* Acceso al Cargue Inicial de Saldos */}
+      <Link href="/migracion/cargue-inicial"
+        className="block rounded-2xl border-2 border-primary-100 bg-primary-50 hover:bg-primary-100 transition p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="text-3xl">📥</span>
+            <div>
+              <p className="font-bold text-gray-800">Cargue Inicial de Saldos</p>
+              <p className="text-sm text-gray-500">Legaliza un crédito antiguo con su historial de pagos y recalcula su estado a una fecha de corte.</p>
+            </div>
+          </div>
+          <span className="text-primary-600 font-semibold whitespace-nowrap">Abrir →</span>
+        </div>
+      </Link>
 
       {/* Stepper */}
       <div className="flex items-center gap-2 text-xs font-semibold">
