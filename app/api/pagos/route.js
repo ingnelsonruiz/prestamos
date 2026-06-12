@@ -16,8 +16,8 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null, q = query)
        (SELECT row_to_json(pr) FROM (
           SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
           FROM ${S}.cred_productos WHERE id = $1) pr)                          AS prod,
-       (SELECT COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0)
-          FROM ${S}.cred_cuotas WHERE producto_id = $1)                        AS capital_pagado,
+       (SELECT COALESCE(SUM(monto_capital::numeric), 0)
+          FROM ${S}.cred_pagos WHERE producto_id = $1)                         AS capital_pagado,
        (SELECT COALESCE(json_agg(json_build_object(
             'id', id, 'numero_cuota', numero_cuota, 'monto_pagado', monto_pagado,
             'abono_interes', abono_interes, 'abono_capital', abono_capital,
@@ -243,7 +243,8 @@ export async function POST(request) {
     const cuotasAplicadas = []
     const batchUpdates = []   // acumular para un solo UPDATE en batch
 
-    for (const c of cuotasPendientes) {
+    for (let i = 0; i < cuotasPendientes.length; i++) {
+      const c = cuotasPendientes[i]
       if (restante <= 0) break
       const saldoC  = parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0)
       const aplicar = Math.min(restante, saldoC)
@@ -256,6 +257,18 @@ export async function POST(request) {
       batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
       cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: aplicar, estado: estadoC })
       restante -= aplicar
+      // Si la cuota quedó pagada y hay sobrante que NO cubre el total restante de cuotas
+      // siguientes, ese sobrante es abono puro a capital: no se distribuye en intereses futuros.
+      if (estadoC === 'pagada' && restante > 0.5) {
+        const totalSiguientes = cuotasPendientes.slice(i + 1).reduce(
+          (s, cx) => s + parseFloat(cx.monto_cuota) - parseFloat(cx.monto_pagado || 0), 0
+        )
+        if (restante < totalSiguientes - 0.5) {
+          capitalAbonado += restante
+          restante = 0
+          break
+        }
+      }
     }
 
     const interesAbonado    = Math.round(montoNum - capitalAbonado)
