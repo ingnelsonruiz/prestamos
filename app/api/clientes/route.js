@@ -13,10 +13,20 @@ export async function GET(request) {
     const sql = `
       SELECT c.*,
         COUNT(DISTINCT p.id) FILTER (WHERE p.estado NOT IN ('saldado','decomisado','refinanciado')) AS productos_activos,
-        COUNT(DISTINCT cu.id) FILTER (WHERE cu.estado = 'mora') AS cuotas_en_mora,
+        -- Mora derivada por fecha (no por estado persistido): cuota vencida y no pagada,
+        -- excluyendo cuentas abiertas (fiado/adelanto, vencen 2099-12-31).
+        COUNT(DISTINCT cu.id) FILTER (
+          WHERE cu.fecha_vencimiento < CURRENT_DATE
+            AND cu.estado != 'pagada'
+            AND cu.fecha_vencimiento <> DATE '2099-12-31'
+        ) AS cuotas_en_mora,
         CASE
           WHEN COUNT(DISTINCT p.id) FILTER (WHERE p.estado NOT IN ('saldado','decomisado','refinanciado')) = 0 THEN 'sin_prestamos'
-          WHEN COUNT(DISTINCT cu.id) FILTER (WHERE cu.estado = 'mora') > 0 THEN 'en_mora'
+          WHEN COUNT(DISTINCT cu.id) FILTER (
+            WHERE cu.fecha_vencimiento < CURRENT_DATE
+              AND cu.estado != 'pagada'
+              AND cu.fecha_vencimiento <> DATE '2099-12-31'
+          ) > 0 THEN 'en_mora'
           WHEN COUNT(DISTINCT p.id) FILTER (WHERE p.estado NOT IN ('saldado','decomisado','refinanciado')) > 0 THEN 'activo'
           ELSE 'sin_prestamos'
         END AS estado_calculado

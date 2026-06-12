@@ -14,8 +14,13 @@ export async function GET(request) {
     let sql = `
       SELECT p.*, c.nombre AS nombre_cliente, c.documento, c.telefono, c.direccion,
              COUNT(cu.id) AS total_cuotas,
-             COUNT(cu.id) FILTER (WHERE cu.estado IN ('pendiente','parcial','mora')) AS cuotas_pendientes,
-             COUNT(cu.id) FILTER (WHERE cu.estado = 'mora') AS cuotas_mora,
+             COUNT(cu.id) FILTER (WHERE cu.estado IN ('pendiente','parcial')) AS cuotas_pendientes,
+             -- Mora derivada por fecha (no por estado persistido), excluyendo cuentas abiertas.
+             COUNT(cu.id) FILTER (
+               WHERE cu.fecha_vencimiento < CURRENT_DATE
+                 AND cu.estado != 'pagada'
+                 AND cu.fecha_vencimiento <> DATE '2099-12-31'
+             ) AS cuotas_mora,
              COALESCE(SUM(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado != 'pagada'),0) AS capital_pendiente,
              por.referencia  AS ref_nuevo,
              orig.referencia AS ref_origen

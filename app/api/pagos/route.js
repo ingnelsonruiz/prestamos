@@ -33,7 +33,16 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
 
   const capitalPagado = parseFloat(capRes.rows[0].capital_pagado)
   const saldoCapital  = Math.round(parseFloat(prod.monto_capital) - capitalPagado)
-  if (saldoCapital <= 0) return
+  if (saldoCapital <= 0) {
+    // Capital totalmente abonado: no queda nada por cobrar. Cerrar cualquier
+    // cuota pendiente (el interés del período ya se cobró en el pago) para que
+    // el crédito quede saldado y no queden cuotas "fantasma" sin pagar.
+    await query(
+      `UPDATE ${S}.cred_cuotas SET estado = 'pagada', saldo_pendiente = 0
+       WHERE producto_id = $1 AND estado != 'pagada'`, [productoId]
+    )
+    return
+  }
 
   let pending = pendRes.rows
   if (!pending.length) return
@@ -225,7 +234,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'cuota_id y monto son obligatorios' }, { status: 400 })
 
     const cuotaRes = await query(
-      `SELECT cu.*, p.cliente_id FROM ${S}.cred_cuotas cu
+      `SELECT cu.*, p.cliente_id, p.metodo_calculo, p.monto_capital FROM ${S}.cred_cuotas cu
        JOIN ${S}.cred_productos p ON p.id = cu.producto_id WHERE cu.id=$1`, [cuota_id]
     )
     if (!cuotaRes.rows.length)
@@ -235,7 +244,7 @@ export async function POST(request) {
     // ── Paralelo 1: queries independientes al mismo tiempo ──────────────
     // El consecutivo se incrementa atómicamente aquí para evitar recibos duplicados
     // en pagos concurrentes. El resto de cálculos no cambia.
-    const [modoPruebaRes, pendientesRes, consRes, u] = await Promise.all([
+    const [modoPruebaRes, pendientesRes, consRes, capPagadoRes, u] = await Promise.all([
       query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`),
       query(
         `SELECT * FROM ${S}.cred_cuotas
@@ -249,6 +258,12 @@ export async function POST(request) {
          WHERE clave = 'recibo_consecutivo'
          RETURNING (valor::int - 1) AS consecutivo`
       ),
+      // Capital ya abonado ANTES de este pago (para topar el abono a capital)
+      query(
+        `SELECT COALESCE(SUM(GREATEST(0, monto_pagado::numeric - abono_interes::numeric)), 0) AS capital_pagado
+         FROM ${S}.cred_cuotas WHERE producto_id = $1`,
+        [cuotaRef.producto_id]
+      ),
       getUsuarioDesdeRequest(request),
     ])
 
@@ -261,9 +276,32 @@ export async function POST(request) {
       (s, c) => s + parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0), 0
     )
     const montoNum = parseFloat(monto)
+    const fmtCOP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v)
 
-    if (montoNum > totalPendiente + 1) {
-      const fmtCOP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v)
+    // ── Método del crédito y saldos para el tope de pago ──────────────────
+    // En 'plano' el interés se recalcula sobre el saldo de capital tras cada
+    // abono, por lo que lo MÁXIMO que se debe HOY es: capital pendiente +
+    // interés del período actual. Cobrar más implicaría sobrecobrar interés
+    // de períodos futuros (que aún no se han causado).
+    const esPlano = (cuotaRef.metodo_calculo || 'plano') !== 'frances'
+    const capitalPagadoPrevio = parseFloat(capPagadoRes.rows[0]?.capital_pagado || 0)
+    const saldoCapitalPend = Math.max(0, parseFloat(cuotaRef.monto_capital || 0) - capitalPagadoPrevio)
+    const cuotaActual = cuotasPendientes[0]
+    const interesPeriodoActual = cuotaActual
+      ? Math.max(0, parseFloat(cuotaActual.abono_interes || 0)
+          - Math.min(parseFloat(cuotaActual.monto_pagado || 0), parseFloat(cuotaActual.abono_interes || 0)))
+      : 0
+
+    if (esPlano) {
+      const maxPago = saldoCapitalPend + interesPeriodoActual
+      if (montoNum > maxPago + 1) {
+        return NextResponse.json({
+          error: 'El pago (' + fmtCOP(montoNum) + ') supera lo que se debe hoy: capital pendiente ('
+            + fmtCOP(saldoCapitalPend) + ') + interés del período (' + fmtCOP(interesPeriodoActual)
+            + ') = ' + fmtCOP(maxPago) + '. Para saldar todo el crédito use “Recoger crédito”.'
+        }, { status: 400 })
+      }
+    } else if (montoNum > totalPendiente + 1) {
       return NextResponse.json({
         error: 'El monto (' + fmtCOP(montoNum) + ') supera el saldo pendiente (' + fmtCOP(totalPendiente) + ').'
       }, { status: 400 })
@@ -273,24 +311,48 @@ export async function POST(request) {
     const numeroRecibo = 'REC-' + String(consecutivo).padStart(6, '0')
 
     // ── Calcular distribución del pago (sin queries) ──────────────────────
-    let restante = montoNum
     let capitalAbonado = 0
     const cuotasAplicadas = []
     const batchUpdates = []
 
-    for (const c of cuotasPendientes) {
-      if (restante <= 0) break
-      const saldoC  = parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0)
-      const aplicar = Math.min(restante, saldoC)
-      const nuevoP  = parseFloat(c.monto_pagado || 0) + aplicar
-      const yaInteresAbonado    = Math.min(parseFloat(c.monto_pagado || 0), parseFloat(c.abono_interes || 0))
-      const interesPendiente    = Math.max(0, parseFloat(c.abono_interes || 0) - yaInteresAbonado)
-      const interesEnAplicacion = Math.min(aplicar, interesPendiente)
-      capitalAbonado += Math.max(0, aplicar - interesEnAplicacion)
-      const estadoC = nuevoP >= parseFloat(c.monto_cuota) ? 'pagada' : 'parcial'
-      batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
-      cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: aplicar, estado: estadoC })
-      restante -= aplicar
+    if (esPlano) {
+      // REGLA DE NEGOCIO (plano): en cada cobro se cobra ÚNICAMENTE el interés
+      // del período actual (el de la cuota más antigua pendiente) y TODO el
+      // excedente se abona a CAPITAL. No se cobra por adelantado el interés de
+      // cuotas futuras: al bajar el capital, recalcularCuotasPlano recomputa el
+      // interés de las cuotas restantes sobre el nuevo saldo (interés
+      // decreciente). Aplicar el interés de varias cuotas sobre-cobraría.
+      const c = cuotasPendientes[0]
+      if (c) {
+        const yaPagado            = parseFloat(c.monto_pagado || 0)
+        const interesPendiente    = Math.max(0, parseFloat(c.abono_interes || 0)
+          - Math.min(yaPagado, parseFloat(c.abono_interes || 0)))
+        const interesEnAplicacion = Math.min(montoNum, interesPendiente)
+        capitalAbonado            = Math.max(0, montoNum - interesEnAplicacion)
+        const nuevoP              = yaPagado + montoNum
+        const estadoC             = nuevoP >= parseFloat(c.monto_cuota) ? 'pagada' : 'parcial'
+        batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
+        cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: montoNum, estado: estadoC })
+      }
+    } else {
+      // Sistema francés: cronograma fijo de saldo decreciente. Se mantiene la
+      // distribución clásica cuota por cuota (interés de cada cuota, luego su
+      // capital), pues el francés no se redistribuye tras cada pago.
+      let restante = montoNum
+      for (const c of cuotasPendientes) {
+        if (restante <= 0) break
+        const saldoC  = parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado || 0)
+        const aplicar = Math.min(restante, saldoC)
+        const nuevoP  = parseFloat(c.monto_pagado || 0) + aplicar
+        const yaInteresAbonado    = Math.min(parseFloat(c.monto_pagado || 0), parseFloat(c.abono_interes || 0))
+        const interesPendiente    = Math.max(0, parseFloat(c.abono_interes || 0) - yaInteresAbonado)
+        const interesEnAplicacion = Math.min(aplicar, interesPendiente)
+        capitalAbonado += Math.max(0, aplicar - interesEnAplicacion)
+        const estadoC = nuevoP >= parseFloat(c.monto_cuota) ? 'pagada' : 'parcial'
+        batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC })
+        cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: aplicar, estado: estadoC })
+        restante -= aplicar
+      }
     }
 
     // ── Batch UPDATE: todas las cuotas en una sola query ──────────────────

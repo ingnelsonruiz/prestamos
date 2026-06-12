@@ -132,10 +132,16 @@ export async function POST(request) {
           monto_capital: Math.round(capitalAplicado),
         })
       } else {
-        // Sin pago: ¿venció antes de la fecha de corte? → mora ; si no → pendiente
+        // Sin pago: la mora NO se persiste como estado de cuota. Convención del
+        // sistema (CLAUDE.md §16): la mora se DERIVA por fecha en cada consulta
+        // (dashboard, cobros, informes usan `fecha_vencimiento < hoy`). Si se
+        // guardara estado='mora', la cuota quedaría fuera de todos los filtros
+        // `estado IN ('pendiente','parcial')` y desaparecería de Cobros, cartera
+        // vencida, capital en la calle, etc. Por eso queda 'pendiente'.
+        // Solo marcamos hayMora para fijar el estado del PRODUCTO en 'en_mora'.
         const moraCorte = diasEntre(venc, fCorte)
-        if (moraCorte > 0) { estado = 'mora'; dias_mora = moraCorte; hayMora = true }
-        else estado = 'pendiente'
+        if (moraCorte > 0) hayMora = true
+        estado = 'pendiente'   // dias_mora se mantiene en 0; se recalcula por fecha
       }
 
       cuotasFinales.push({

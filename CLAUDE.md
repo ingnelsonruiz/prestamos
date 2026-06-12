@@ -434,14 +434,17 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 
 ### Registrar pago
 `POST /api/pagos` — flujo en bloques paralelos:
-1. **Paralelo 1**: modo_prueba + cuotas pendientes + consecutivo atómico (`UPDATE RETURNING`) + usuario.
-2. Calcular distribución en memoria: por cada cuota pendiente en orden, aplica el pago cubriendo primero interés pendiente, luego capital. `capitalAbonado` se acumula por diferencia.
-3. **Batch UPDATE** cuotas (`monto_pagado`, `estado`, `dias_mora=0`).
-4. **Paralelo 2**: INSERT `cred_pagos` + SELECT último saldo de caja.
-5. INSERT `cred_movimientos_caja` con saldo acumulado calculado.
-6. `recalcularCuotasPlano(productoId, snapshotInfo)` — redistribuye cuotas restantes con nuevo saldo capital. Si hubo abono a capital (`capitalAbonado > 0.5`) inserta un snapshot `recalculo_capital` en `cred_historial_recalculos`.
-7. Verificar si quedan pendientes → marcar producto `saldado` si no quedan.
-8. Detectar si cuota pagada era la última y queda capital → `requiere_refinanciacion`.
+1. **Paralelo 1**: modo_prueba + cuotas pendientes + consecutivo atómico (`UPDATE RETURNING`) + capital pagado previo + usuario.
+2. **Tope de pago** (solo `plano`): el monto no puede superar `capital_pendiente + interés del período actual` (lo máximo que se debe HOY). Para saldar todo el crédito se usa "Recoger crédito" (liquidación). En `frances` el tope es el total pendiente del cronograma.
+3. Calcular distribución en memoria:
+   - **`plano` (REGLA DE NEGOCIO)**: se cobra **únicamente el interés del período actual** (el de la cuota más antigua pendiente) y **todo el excedente se abona a CAPITAL**. NO se cobra por adelantado el interés de cuotas futuras; al bajar el capital, `recalcularCuotasPlano` recomputa el interés de las cuotas restantes sobre el nuevo saldo (interés decreciente). Aplicar interés de varias cuotas en un mismo pago **sobre-cobraría** al cliente.
+   - **`frances`**: distribución clásica cuota por cuota (interés de cada cuota, luego su capital), pues el cronograma es fijo y no se redistribuye.
+5. **Batch UPDATE** cuotas (`monto_pagado`, `estado`, `dias_mora=0`).
+6. **Paralelo 2**: INSERT `cred_pagos` + SELECT último saldo de caja.
+7. INSERT `cred_movimientos_caja` con saldo acumulado calculado.
+8. `recalcularCuotasPlano(productoId, snapshotInfo)` — redistribuye cuotas restantes con nuevo saldo capital. Si el capital queda en 0 cierra todas las cuotas pendientes (crédito `saldado`). Si hubo abono a capital (`capitalAbonado > 0.5`) inserta un snapshot `recalculo_capital` en `cred_historial_recalculos`.
+9. Verificar si quedan pendientes → marcar producto `saldado` si no quedan.
+10. Detectar si cuota pagada era la última y queda capital → `requiere_refinanciacion`.
 
 El pago guarda el desglose exacto en `cred_pagos.monto_interes` y `cred_pagos.monto_capital` (interés pactado al cobro), independiente de recálculos posteriores.
 
@@ -496,6 +499,10 @@ Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** →
 | `13_backup_historial.sql` | Tabla `cred_backups` |
 | `14_indices_rendimiento_v2.sql` | Índices trigram (si hay `pg_trgm`), arqueo por día, parciales + ANALYZE |
 | `15_metodo_desembolso.sql` | Columnas `metodo_desembolso`, `entidad_desembolso`, `referencia_desembolso` + CHECK |
+| `16_normalizar_mora_cuotas.sql` | Normaliza cuotas guardadas como `estado='mora'` (legado del cargue inicial) → `pendiente/parcial` y recalcula estado de productos. Idempotente, no destructivo |
+| `17_check_estado_cuota.sql` | **Blindaje**: `CHECK chk_cred_cuotas_estado IN ('pendiente','parcial','pagada')` para impedir que se vuelva a persistir `'mora'`. Ejecutar después de la 16 |
+
+> **Convención de mora**: `cred_cuotas.estado` ∈ {`pendiente`,`parcial`,`pagada`}. La **mora NO es un estado almacenado**; se deriva por `fecha_vencimiento < CURRENT_DATE` en cada consulta (Cobros, dashboard, informes, listados de clientes/productos). El cargue inicial fija la mora solo a nivel de **producto** (`estado='en_mora'`), nunca en la cuota.
 
 > **`00_schema_completo.sql`**: estructura completa **idempotente** (`IF NOT EXISTS` en todo). Sirve para levantar la BD desde cero o normalizar una existente. El endpoint `POST /api/backup/estructura` ejecuta esta misma estructura desde la app.
 
