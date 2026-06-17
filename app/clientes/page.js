@@ -128,7 +128,19 @@ export default function ClientesPage() {
     setConfirmLimpiar(false)
   }
 
+  const [ordenFecha, setOrdenFecha] = useState(null) // null | 'asc' | 'desc'
+
   const numPrueba = clientes.filter(c => c.es_prueba).length
+
+  const toggleOrden = () => setOrdenFecha(o => o === 'desc' ? 'asc' : 'desc')
+
+  const clientesOrdenados = ordenFecha
+    ? [...clientes].sort((a, b) => {
+        const fa = new Date(a.fecha_creacion || 0)
+        const fb = new Date(b.fecha_creacion || 0)
+        return ordenFecha === 'desc' ? fb - fa : fa - fb
+      })
+    : clientes
 
   const hoy = new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' })
   const creadosHoy = clientes.filter(c => {
@@ -254,13 +266,21 @@ export default function ClientesPage() {
               <th className="text-left px-4 py-3">Teléfono</th>
               <th className="text-left px-4 py-3">Estado</th>
               <th className="text-left px-4 py-3">Activos</th>
-              <th className="text-left px-4 py-3">Registro</th>
+              <th className="text-left px-4 py-3">
+                <button onClick={toggleOrden}
+                  className="flex items-center gap-1 hover:text-gray-800 transition-colors group">
+                  Registro
+                  <span className="text-xs">
+                    {ordenFecha === 'asc' ? '↑' : ordenFecha === 'desc' ? '↓' : <span className="text-gray-300 group-hover:text-gray-500">↕</span>}
+                  </span>
+                </button>
+              </th>
               <th className="text-center px-4 py-3" title="Marcar como cliente de prueba">🧪 Prueba</th>
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {clientes.map(c => (
+            {clientesOrdenados.map(c => (
               <tr key={c.id} className={`hover:bg-gray-50 ${c.es_prueba ? 'bg-amber-50' : ''}`}>
                 <td className="px-4 py-3 font-medium text-gray-900">{c.nombre}</td>
                 <td className="px-4 py-3 text-gray-500">{c.documento}</td>
