@@ -5,7 +5,7 @@ import BottomNav from './BottomNav'
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 
-const RUTAS_PUBLICAS = ['/login', '/estado']
+const RUTAS_PUBLICAS = ['/login', '/estado', '/registro', '/autoregistro']
 
 export default function LayoutWrapper({ children }) {
   const pathname  = usePathname()
