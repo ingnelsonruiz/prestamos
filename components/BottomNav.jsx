@@ -11,6 +11,7 @@ const navPrincipal = [
 ]
 
 const navSecundario = [
+  { href: '/gastos',    label: 'Gastos',    icon: '💸' },
   { href: '/empenos',   label: 'Empeños',   icon: '🔒' },
   { href: '/recibos',   label: 'Recibos',   icon: '🧾' },
   { href: '/informes',  label: 'Informes',  icon: '📈' },
@@ -39,7 +40,7 @@ export default function BottomNav() {
               <div className="w-10 h-1 bg-gray-300 rounded-full" />
             </div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-5 mb-2">Más opciones</p>
-            <div className="grid grid-cols-4 gap-1 px-3">
+            <div className="grid grid-cols-5 gap-1 px-3">
               {navSecundario.map(item => {
                 const active = pathname === item.href ||
                   (item.href !== '/' && pathname.startsWith(item.href))

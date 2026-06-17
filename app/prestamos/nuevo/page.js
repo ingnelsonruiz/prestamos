@@ -183,9 +183,11 @@ function NuevoPrestamoContenido() {
   })
   const [clientes,   setClientes]   = useState([])
   const [tiposList,  setTiposList]  = useState([])
+  const [empresas,   setEmpresas]   = useState([])
   const [cuotas,     setCuotas]     = useState([])
   const [loading,    setLoading]    = useState(false)
   const [error,      setError]      = useState('')
+  const [esInterno,  setEsInterno]  = useState(false) // toggle cliente vs empresa propia
 
   // comportamiento del tipo seleccionado
   const tipoActual     = tiposList.find(t => t.codigo === form.tipo)
@@ -195,6 +197,7 @@ function NuevoPrestamoContenido() {
 
   useEffect(() => {
     fetch('/api/clientes').then(r=>r.json()).then(setClientes)
+    fetch('/api/empresas').then(r=>r.json()).then(d => setEmpresas(Array.isArray(d) ? d.filter(e=>e.activo) : []))
     fetch('/api/configuracion/tipos').then(r=>r.json()).then(data => {
       const activos = Array.isArray(data) ? data.filter(t => t.activo) : []
       setTiposList(activos)
@@ -250,13 +253,17 @@ function NuevoPrestamoContenido() {
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         ...form,
-        monto_capital:        parseFloat(form.monto_capital),
-        tasa_interes:         parseFloat(form.tasa_interes),
-        num_cuotas:           parseInt(form.num_cuotas),
-        cuota_inicial:        parseFloat(form.cuota_inicial||0),
-        valor_comercial_bien: parseFloat(form.valor_comercial_bien||0)||null,
-        es_refinanciacion_de: refinanciaId || null,
-        entidad_desembolso:   entidadFinal,
+        monto_capital:         parseFloat(form.monto_capital),
+        tasa_interes:          parseFloat(form.tasa_interes),
+        num_cuotas:            parseInt(form.num_cuotas),
+        cuota_inicial:         parseFloat(form.cuota_inicial||0),
+        valor_comercial_bien:  parseFloat(form.valor_comercial_bien||0)||null,
+        es_refinanciacion_de:  refinanciaId || null,
+        entidad_desembolso:    entidadFinal,
+        es_prestamo_interno:   esInterno,
+        empresa_id:            esInterno ? (form.empresa_id||null) : null,
+        // Préstamo interno: sin interés, 1 cuota abierta — se liquida al recoger
+        ...(esInterno ? { tasa_interes: 0, con_interes: false } : {}),
       })
     })
     const data = await res.json()
@@ -330,11 +337,52 @@ function NuevoPrestamoContenido() {
         {/* Formulario */}
         <form onSubmit={guardar} className="bg-white rounded-xl border p-6 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2">
-              <label className="text-xs font-medium text-gray-600">Cliente *</label>
-              <SelectorCliente clientes={clientes} value={form.cliente_id} onChange={v=>set('cliente_id',v)} />
-              {!form.cliente_id && <p className="text-xs text-red-400 mt-1">Requerido</p>}
-            </div>
+
+            {/* Toggle: préstamo a cliente o a empresa propia */}
+            {!refinanciaId && (
+              <div className="col-span-2">
+                <div className="flex rounded-lg border overflow-hidden text-sm font-medium">
+                  <button type="button"
+                    onClick={() => { setEsInterno(false); set('empresa_id', ''); set('es_prestamo_interno', false) }}
+                    className={`flex-1 py-2 transition-colors ${!esInterno ? 'bg-primary-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+                    👤 Préstamo a cliente
+                  </button>
+                  <button type="button"
+                    onClick={() => { setEsInterno(true); set('cliente_id', ''); set('es_prestamo_interno', true); set('tasa_interes','0') }}
+                    className={`flex-1 py-2 transition-colors ${esInterno ? 'bg-violet-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+                    🏢 Empresa propia
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Selector empresa propia */}
+            {esInterno ? (
+              <div className="col-span-2">
+                <label className="text-xs font-medium text-gray-600">Empresa *</label>
+                <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.empresa_id||''} onChange={e=>set('empresa_id',e.target.value)} required={esInterno}>
+                  <option value="">— Seleccionar empresa —</option>
+                  {empresas.map(e => (
+                    <option key={e.id} value={e.id}>{e.nombre}</option>
+                  ))}
+                </select>
+                {empresas.length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    No hay empresas registradas. Créalas en <a href="/gastos" className="underline">Módulo de Gastos</a>.
+                  </p>
+                )}
+                <div className="mt-2 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 text-xs text-violet-700">
+                  🏢 Préstamo interno — sin interés fijo. El monto final se acuerda al recoger mediante Liquidación anticipada.
+                </div>
+              </div>
+            ) : (
+              <div className="col-span-2">
+                <label className="text-xs font-medium text-gray-600">Cliente *</label>
+                <SelectorCliente clientes={clientes} value={form.cliente_id} onChange={v=>set('cliente_id',v)} />
+                {!form.cliente_id && <p className="text-xs text-red-400 mt-1">Requerido</p>}
+              </div>
+            )}
 
             <div>
               <label className="text-xs font-medium text-gray-600">Tipo</label>
