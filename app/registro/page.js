@@ -65,8 +65,11 @@ export default function RegistroPage() {
   const cambiar = (e) => {
     const { name, value } = e.target
     setForm(p => ({ ...p, [name]: value }))
-    if (name === 'documento') setCedulaExiste(false) // reset al escribir
+    if (name === 'documento') setCedulaExiste(false)
   }
+
+  // Evita que Enter en cualquier campo de texto dispare el submit
+  const noEnter = (e) => { if (e.key === 'Enter') e.preventDefault() }
 
   const tocar = (name) => setTocados(p => ({ ...p, [name]: true }))
 
@@ -123,6 +126,7 @@ export default function RegistroPage() {
           placeholder={placeholder}
           value={form[name]}
           onChange={cambiar}
+          onKeyDown={noEnter}
           onBlur={() => {
             tocar(name)
             if (name === 'documento') verificarCedula(form.documento)
@@ -182,6 +186,7 @@ export default function RegistroPage() {
                 placeholder="Ej: 1067712345"
                 value={form.documento}
                 onChange={cambiar}
+                onKeyDown={noEnter}
                 onBlur={() => { tocar('documento'); verificarCedula(form.documento) }}
                 className={`w-full border rounded-xl px-4 py-3 text-sm bg-white focus:outline-none focus:ring-2 transition-colors pr-10
                   ${mostrarError('documento')
