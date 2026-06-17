@@ -130,6 +130,12 @@ export default function ClientesPage() {
 
   const numPrueba = clientes.filter(c => c.es_prueba).length
 
+  const hoy = new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' })
+  const creadosHoy = clientes.filter(c => {
+    if (!c.fecha_creacion) return false
+    return new Date(c.fecha_creacion).toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' }) === hoy
+  }).length
+
   return (
     <div className="space-y-6">
       {/* Encabezado */}
@@ -164,6 +170,20 @@ export default function ClientesPage() {
         value={buscar}
         onChange={e => { setBuscar(e.target.value); cargar(e.target.value) }}
       />
+
+      {/* Contador del día */}
+      <div className="flex gap-3 flex-wrap">
+        <div className="bg-white border rounded-xl px-4 py-2.5 flex items-center gap-2 text-sm">
+          <span className="text-gray-500">Total clientes:</span>
+          <span className="font-bold text-gray-800">{clientes.length}</span>
+        </div>
+        {creadosHoy > 0 && (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 flex items-center gap-2 text-sm">
+            <span className="text-green-600">Registrados hoy:</span>
+            <span className="font-bold text-green-700">{creadosHoy}</span>
+          </div>
+        )}
+      </div>
 
       {/* Filtros de tipo + botón limpiar prueba */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -234,6 +254,7 @@ export default function ClientesPage() {
               <th className="text-left px-4 py-3">Teléfono</th>
               <th className="text-left px-4 py-3">Estado</th>
               <th className="text-left px-4 py-3">Activos</th>
+              <th className="text-left px-4 py-3">Registro</th>
               <th className="text-center px-4 py-3" title="Marcar como cliente de prueba">🧪 Prueba</th>
               <th className="px-4 py-3"></th>
             </tr>
@@ -250,6 +271,11 @@ export default function ClientesPage() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-center">{c.productos_activos || 0}</td>
+                <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                  {c.fecha_creacion
+                    ? new Date(c.fecha_creacion).toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' })
+                    : '—'}
+                </td>
                 <td className="px-4 py-3 text-center">
                   <input
                     type="checkbox"
