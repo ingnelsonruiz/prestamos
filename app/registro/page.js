@@ -158,7 +158,7 @@ export default function RegistroPage() {
           ITL
         </div>
         <div>
-          <p className="text-xs text-gray-500 leading-none">Inversiones Tata Liñán</p>
+          <p className="text-xs text-gray-500 leading-none">Inversiones Hnos Liñán</p>
           <p className="text-sm font-semibold text-gray-800 leading-tight mt-0.5">Formulario de registro</p>
         </div>
       </div>
@@ -246,7 +246,7 @@ export default function RegistroPage() {
         </form>
 
         <p className="text-center text-xs text-gray-400 mt-6 leading-relaxed">
-          Tu información es confidencial y solo será usada por Inversiones Tata Liñán.
+          Tu información es confidencial y solo será usada por Inversiones Hnos Liñán.
         </p>
       </div>
     </div>
