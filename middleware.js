@@ -5,7 +5,7 @@ const SECRET  = new TextEncoder().encode(process.env.JWT_SECRET || 'inversiones-
 const COOKIE  = 'itl_session'
 
 // Rutas que NO requieren login
-const PUBLICAS = ['/login', '/estado', '/api/auth', '/api/estado']
+const PUBLICAS = ['/login', '/estado', '/api/auth', '/api/estado', '/autoregistro', '/api/autoregistro', '/registro', '/api/registro']
 
 export async function middleware(request) {
   const { pathname } = request.nextUrl

@@ -30,13 +30,17 @@ export async function GET(request, { params }) {
 export async function PUT(request, { params }) {
   try {
     const { id } = params
-    const { nombre, telefono, direccion, email } = await request.json()
+    const { nombre, telefono, direccion, email, es_prueba } = await request.json()
     if (!nombre?.trim()) return NextResponse.json({ error: 'El nombre es obligatorio' }, { status: 400 })
 
     const [result, u] = await Promise.all([
       query(
-        `UPDATE ${S}.cred_clientes SET nombre=$1,telefono=$2,direccion=$3,email=$4 WHERE id=$5 RETURNING *`,
-        [nombre.trim(), telefono||null, direccion||null, email||null, id]
+        `UPDATE ${S}.cred_clientes
+         SET nombre=$1, telefono=$2, direccion=$3, email=$4,
+             es_prueba=COALESCE($5, es_prueba)
+         WHERE id=$6 RETURNING *`,
+        [nombre.trim(), telefono||null, direccion||null, email||null,
+         typeof es_prueba === 'boolean' ? es_prueba : null, id]
       ),
       getUsuarioDesdeRequest(request),
     ])
@@ -44,7 +48,7 @@ export async function PUT(request, { params }) {
 
     auditar({ ...u, accion: ACCIONES.EDITAR_CLIENTE || 'Editar cliente', modulo: MODULOS.CLIENTES,
       descripcion: `Editó datos de cliente: ${nombre.trim()}`,
-      detalle: { id, nombre: nombre.trim(), telefono, direccion, email }
+      detalle: { id, nombre: nombre.trim(), telefono, direccion, email, es_prueba }
     }).catch(err => console.error('[auditoría editar cliente]', err.message))
 
     return NextResponse.json(result.rows[0])
@@ -56,15 +60,34 @@ export async function PUT(request, { params }) {
 export async function DELETE(request, { params }) {
   try {
     const { id } = params
-    const tiene = await query(
-      `SELECT 1 FROM ${S}.cred_productos WHERE cliente_id=$1 AND estado NOT IN ('saldado','decomisado') LIMIT 1`, [id]
+
+    // Verificar que el cliente exista y obtener su nombre para auditoría
+    const cli = await query(`SELECT nombre, es_prueba FROM ${S}.cred_clientes WHERE id=$1`, [id])
+    if (!cli.rows.length) return NextResponse.json({ error: 'No encontrado' }, { status: 404 })
+
+    // Contar movimientos: productos (cualquier estado) + pagos
+    const movimientos = await query(
+      `SELECT
+         (SELECT COUNT(*) FROM ${S}.cred_productos WHERE cliente_id=$1) AS num_productos,
+         (SELECT COUNT(*) FROM ${S}.cred_pagos    WHERE cliente_id=$1) AS num_pagos`,
+      [id]
     )
-    if (tiene.rows.length)
-      return NextResponse.json({ error: 'El cliente tiene productos activos' }, { status: 400 })
+    const { num_productos, num_pagos } = movimientos.rows[0]
+
+    if (Number(num_productos) > 0 || Number(num_pagos) > 0) {
+      return NextResponse.json({
+        error: `No se puede eliminar: el cliente tiene ${num_productos} producto(s) y ${num_pagos} pago(s) registrados.`
+      }, { status: 400 })
+    }
+
     await query(`DELETE FROM ${S}.cred_clientes WHERE id=$1`, [id])
+
     const u = await getUsuarioDesdeRequest(request)
     await auditar({ ...u, accion: ACCIONES.ELIMINAR_CLIENTE, modulo: MODULOS.CLIENTES,
-      descripcion: `Eliminó cliente ID: ${id}`, detalle: { id } })
+      descripcion: `Eliminó cliente: ${cli.rows[0].nombre} (${cli.rows[0].es_prueba ? 'prueba' : 'real'})`,
+      detalle: { id, es_prueba: cli.rows[0].es_prueba }
+    })
+
     return NextResponse.json({ ok: true })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
