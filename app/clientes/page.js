@@ -268,10 +268,13 @@ export default function ClientesPage() {
               <th className="text-left px-4 py-3">Activos</th>
               <th className="text-left px-4 py-3">
                 <button onClick={toggleOrden}
-                  className="flex items-center gap-1 hover:text-gray-800 transition-colors group">
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold uppercase transition-colors
+                    ${ordenFecha
+                      ? 'bg-primary-100 text-primary-700 border border-primary-300'
+                      : 'bg-gray-100 text-gray-600 border border-gray-300 hover:bg-gray-200'}`}>
                   Registro
-                  <span className="text-xs">
-                    {ordenFecha === 'asc' ? '↑' : ordenFecha === 'desc' ? '↓' : <span className="text-gray-300 group-hover:text-gray-500">↕</span>}
+                  <span className="text-sm font-bold">
+                    {ordenFecha === 'asc' ? '↑' : ordenFecha === 'desc' ? '↓' : '↕'}
                   </span>
                 </button>
               </th>
