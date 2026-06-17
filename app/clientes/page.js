@@ -305,7 +305,11 @@ export default function ClientesPage() {
                   <input type={f.type} required={f.label.includes('*')}
                     className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                     value={form[f.name]}
-                    onChange={e => setForm(p => ({...p, [f.name]: e.target.value}))}
+                    onChange={e => {
+                      const mayus = ['nombre','direccion']
+                      const val = mayus.includes(f.name) ? e.target.value.toUpperCase() : e.target.value
+                      setForm(p => ({...p, [f.name]: val}))
+                    }}
                   />
                 </div>
               ))}

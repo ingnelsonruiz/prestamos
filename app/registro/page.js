@@ -87,11 +87,15 @@ export default function RegistroPage() {
   const errores   = validar(form, cedulaExiste)
   const formValido = Object.keys(errores).length === 0
 
+  // Campos que van en mayúsculas (no aplica a documento, teléfonos ni email)
+  const MAYUSCULAS = ['nombre', 'direccion']
+
   const cambiar = useCallback((e) => {
     const { name, value } = e.target
-    setForm(p => ({ ...p, [name]: value }))
+    const val = MAYUSCULAS.includes(name) ? value.toUpperCase() : value
+    setForm(p => ({ ...p, [name]: val }))
     if (name === 'documento') setCedulaExiste(false)
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const noEnter = useCallback((e) => {
     if (e.key === 'Enter') e.preventDefault()

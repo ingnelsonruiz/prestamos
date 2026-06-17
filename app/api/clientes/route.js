@@ -5,21 +5,37 @@ import { auditar, getUsuarioDesdeRequest, ACCIONES, MODULOS } from '@/lib/audito
 
 const S = 'administrativo'
 
-// Auto-migración: agrega es_prueba si no existe (corre una sola vez por proceso)
-let _columnaVerificada = false
+// Auto-migraciones (corren una sola vez por proceso de Node)
+let _migracionesOk = false
 async function asegurarColumnaEsPrueba() {
-  if (_columnaVerificada) return
+  if (_migracionesOk) return
   await query(`
     DO $$ BEGIN
+      -- Columna es_prueba
       IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = '${S}' AND table_name = 'cred_clientes' AND column_name = 'es_prueba'
       ) THEN
         ALTER TABLE ${S}.cred_clientes ADD COLUMN es_prueba BOOLEAN NOT NULL DEFAULT FALSE;
       END IF;
+      -- Columna telefono2
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = '${S}' AND table_name = 'cred_clientes' AND column_name = 'telefono2'
+      ) THEN
+        ALTER TABLE ${S}.cred_clientes ADD COLUMN telefono2 TEXT;
+      END IF;
     END$$
   `)
-  _columnaVerificada = true
+  // Normalizar nombre y dirección existentes a mayúsculas (one-shot)
+  await query(`
+    UPDATE ${S}.cred_clientes
+    SET nombre    = UPPER(nombre),
+        direccion = UPPER(direccion)
+    WHERE nombre <> UPPER(nombre)
+       OR (direccion IS NOT NULL AND direccion <> UPPER(direccion))
+  `)
+  _migracionesOk = true
 }
 
 export async function GET(request) {
