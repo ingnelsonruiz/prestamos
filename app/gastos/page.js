@@ -103,7 +103,7 @@ export default function GastosPage() {
     // Validar que el gasto no supere el saldo operativo de la empresa
     if (tab === TAB.empresa && empresaSel && !formGasto.es_personal) {
       const empData = empresas.find(em => em.id === (formGasto.empresa_id || empresaSel?.id)) || empresaSel
-      const saldo = Number(empData?.saldo_prestamos || 0) + Number(empData?.total_retornos_capital || 0) - Number(empData?.total_gastos || 0)
+      const saldo = Number(empData?.saldo_prestamos || 0) - Number(empData?.total_gastos || 0)
       if (montoGasto > saldo) {
         setLoading(false)
         setErrGasto(
@@ -245,9 +245,9 @@ export default function GastosPage() {
   const totalRetornado   = Number(empActual?.total_retornos          || 0)
   const totalInteres     = Number(empActual?.total_retornos_interes  || 0)
   const capitalRetornado = Number(empActual?.total_retornos_capital  || 0)
-  // Saldo = inversión activa + capital que ya volvió - gastos ejecutados
-  // El interés (ganancia) NO entra en el balance operativo
-  const saldoOperativo   = inversion + capitalRetornado - totalGastado
+  // Saldo operativo = inversión activa - total gastado
+  // El capital retornado y el interés son ganancia aparte; no se suman al saldo operativo
+  const saldoOperativo   = inversion - totalGastado
 
   const totalGastosVista  = gastos.reduce((s,g) => s+Number(g.monto),0)
   const totalRetornosVista = retornos.reduce((s,r) => s+Number(r.monto_total),0)
@@ -309,7 +309,7 @@ export default function GastosPage() {
             </div>
             {empresas.length === 0 && <p className="text-sm text-gray-400 italic">Sin empresas. Crea la primera.</p>}
             {empresas.map(emp => {
-              const saldo = Number(emp.saldo_prestamos||0) + Number(emp.total_retornos_capital||0) - Number(emp.total_gastos||0)
+              const saldo = Number(emp.saldo_prestamos||0) - Number(emp.total_gastos||0)
               const sinMovimientos = Number(emp.saldo_prestamos||0) === 0
                 && Number(emp.total_gastos||0) === 0
                 && Number(emp.total_retornos||0) === 0
@@ -784,7 +784,7 @@ export default function GastosPage() {
         // Saldo disponible en tiempo real
         const empData = empresas.find(em => em.id === (formGasto.empresa_id || empresaSel?.id)) || empresaSel
         const saldoDisp = !formGasto.es_personal && empData
-          ? Number(empData?.saldo_prestamos||0) + Number(empData?.total_retornos_capital||0) - Number(empData?.total_gastos||0)
+          ? Number(empData?.saldo_prestamos||0) - Number(empData?.total_gastos||0)
           : null
         const montoActual = parseFloat(formGasto.monto) || 0
         const excedeSaldo = saldoDisp !== null && montoActual > saldoDisp
