@@ -13,9 +13,9 @@ export async function GET(request) {
 
     let sql = `
       SELECT p.*, c.nombre AS nombre_cliente, c.documento, c.telefono, c.direccion,
+             ep.nombre AS nombre_empresa, ep.codigo AS codigo_empresa, ep.nit AS nit_empresa,
              COUNT(cu.id) AS total_cuotas,
              COUNT(cu.id) FILTER (WHERE cu.estado IN ('pendiente','parcial')) AS cuotas_pendientes,
-             -- Mora derivada por fecha (no por estado persistido), excluyendo cuentas abiertas.
              COUNT(cu.id) FILTER (
                WHERE cu.fecha_vencimiento < CURRENT_DATE
                  AND cu.estado != 'pagada'
@@ -25,14 +25,17 @@ export async function GET(request) {
              por.referencia  AS ref_nuevo,
              orig.referencia AS ref_origen
       FROM ${S}.cred_productos p
-      JOIN ${S}.cred_clientes c ON c.id = p.cliente_id
-      LEFT JOIN ${S}.cred_cuotas cu ON cu.producto_id = p.id
-      LEFT JOIN ${S}.cred_productos por  ON por.id  = p.refinanciado_por
-      LEFT JOIN ${S}.cred_productos orig ON orig.id = p.es_refinanciacion_de
+      LEFT JOIN ${S}.cred_clientes c         ON c.id  = p.cliente_id
+      LEFT JOIN ${S}.cred_empresas_propias ep ON ep.id = p.empresa_id
+      LEFT JOIN ${S}.cred_cuotas cu          ON cu.producto_id = p.id
+      LEFT JOIN ${S}.cred_productos por      ON por.id  = p.refinanciado_por
+      LEFT JOIN ${S}.cred_productos orig     ON orig.id = p.es_refinanciacion_de
     `
     const values = []
+    const empresaId = searchParams.get('empresa_id')
     if (clienteId) { sql += ` WHERE p.cliente_id=$1`; values.push(clienteId) }
-    sql += ` GROUP BY p.id, c.nombre, c.documento, c.telefono, c.direccion, por.referencia, orig.referencia ORDER BY p.fecha_creacion DESC`
+    else if (empresaId) { sql += ` WHERE p.empresa_id=$1 AND p.es_prestamo_interno=TRUE`; values.push(empresaId) }
+    sql += ` GROUP BY p.id, c.nombre, c.documento, c.telefono, c.direccion, ep.nombre, ep.codigo, ep.nit, por.referencia, orig.referencia ORDER BY p.fecha_creacion DESC`
 
     const result = await query(sql, values)
     return NextResponse.json(result.rows)
@@ -53,11 +56,16 @@ export async function POST(request) {
       metodo_calculo, cuota_inicial, descripcion_bien,
       valor_comercial_bien, fecha_limite_rescate, notas,
       es_refinanciacion_de,
-      metodo_desembolso, entidad_desembolso, referencia_desembolso
+      metodo_desembolso, entidad_desembolso, referencia_desembolso,
+      es_prestamo_interno, empresa_id,
     } = body
 
-    if (!cliente_id || !tipo || !monto_capital)
+    // Para préstamos internos (empresa propia) no se requiere cliente_id
+    const esInterno = es_prestamo_interno === true
+    if ((!cliente_id && !esInterno) || !tipo || !monto_capital)
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 })
+    if (esInterno && !empresa_id)
+      return NextResponse.json({ error: 'Selecciona una empresa para el préstamo interno' }, { status: 400 })
 
     // ── Normalización del medio de desembolso ───────────────────────────
     const MEDIOS = ['efectivo','transferencia','nequi','daviplata','llave_breb','otro']
@@ -95,11 +103,12 @@ export async function POST(request) {
 
         const prod = await q(
           `INSERT INTO ${S}.cred_productos
-            (id,referencia,cliente_id,tipo,monto_capital,tasa_interes,num_cuotas,
+            (id,referencia,cliente_id,empresa_id,es_prestamo_interno,tipo,monto_capital,tasa_interes,num_cuotas,
              fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas,
              metodo_desembolso,entidad_desembolso,referencia_desembolso)
-           VALUES ($1,$2,$3,$4,$5,0,1,$6,false,'plano',$7,$8,$9,$10,$11) RETURNING *`,
-          [id, referencia, cliente_id, tipo, capital, fechaUso, descripcion_bien||null, notas||null,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,0,1,$8,false,'plano',$9,$10,$11,$12,$13) RETURNING *`,
+          [id, referencia, cliente_id||null, esInterno?(empresa_id||null):null, esInterno,
+           tipo, capital, fechaUso, descripcion_bien||null, notas||null,
            medioDesemb, entidadDesemb, refDesemb]
         )
         await q(
@@ -107,7 +116,7 @@ export async function POST(request) {
             (id,producto_id,cliente_id,numero_cuota,fecha_vencimiento,
              monto_cuota,abono_interes,abono_capital,saldo_pendiente,monto_pagado,estado)
            VALUES ($1,$2,$3,1,'2099-12-31',$4,0,$4,$4,0,'pendiente')`,
-          [cuotaId, id, cliente_id, capital]
+          [cuotaId, id, cliente_id||null, capital]
         )
         return prod.rows[0]
       })

@@ -8,7 +8,7 @@ const S = 'administrativo'
 export async function POST(request, { params }) {
   try {
     const { id } = params
-    const { monto_acordado, metodo_pago, notas, fecha_pago, recoger_credito } = await request.json()
+    const { monto_acordado, monto_interes, metodo_pago, notas, fecha_pago, recoger_credito } = await request.json()
 
     if (!monto_acordado || parseFloat(monto_acordado) <= 0)
       return NextResponse.json({ error: 'El monto acordado debe ser mayor a cero' }, { status: 400 })
@@ -18,9 +18,10 @@ export async function POST(request, { params }) {
       query(
         `SELECT
            (SELECT row_to_json(p) FROM (
-              SELECT pr.*, c.nombre AS nombre_cliente
+              SELECT pr.*, c.nombre AS nombre_cliente, ep.nombre AS nombre_empresa
               FROM ${S}.cred_productos pr
-              JOIN ${S}.cred_clientes c ON c.id = pr.cliente_id
+              LEFT JOIN ${S}.cred_clientes c         ON c.id  = pr.cliente_id
+              LEFT JOIN ${S}.cred_empresas_propias ep ON ep.id = pr.empresa_id
               WHERE pr.id = $1) p)                                         AS prod,
            (SELECT COALESCE(json_agg(cu.* ORDER BY cu.numero_cuota), '[]'::json)
               FROM ${S}.cred_cuotas cu
@@ -167,12 +168,27 @@ export async function POST(request, { params }) {
            COALESCE((SELECT saldo_acumulado FROM ${S}.cred_movimientos_caja
                      ORDER BY fecha DESC LIMIT 1), 0) + $2)`,
         [uuidv4(), montoAcordado,
-         `${numRecibo} — Liquidación anticipada ${prod.nombre_cliente}`,
+         `${numRecibo} — Liquidación anticipada ${prod.nombre_cliente || prod.nombre_empresa || 'Inversión interna'}`,
          pagoId]
       )
 
       return { numeroRecibo: numRecibo }
     })
+
+    // ── Registrar retorno con interés si aplica (inversión interna) ──────
+    const interesNum = parseFloat(monto_interes || 0)
+    if (interesNum > 0 && prod.empresa_id) {
+      await query(
+        `INSERT INTO ${S}.cred_retornos_empresa
+           (id, empresa_id, producto_id, monto_capital, monto_interes, fecha_retorno, notas, usuario_nombre)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [uuidv4(), prod.empresa_id, id,
+         montoAcordado, interesNum,
+         fechaReal,
+         `COBRO FINAL${notas ? ' — ' + notas : ''}`,
+         u.nombre]
+      ).catch(err => console.error('[retorno_liquidar]', err.message))
+    }
 
     // ── Auditoría fire-and-forget — no bloquea la respuesta ───────────────
     auditar({

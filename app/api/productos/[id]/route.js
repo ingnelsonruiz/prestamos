@@ -12,10 +12,12 @@ export async function GET(request, { params }) {
     const prod = await query(
       `SELECT p.*,
               c.nombre AS nombre_cliente, c.documento,
+              ep.nombre AS nombre_empresa, ep.codigo AS codigo_empresa, ep.nit AS nit_empresa,
               orig.id   AS refinancia_origen_id,
               nuevo.id  AS refinancia_nuevo_id
        FROM ${S}.cred_productos p
-       JOIN ${S}.cred_clientes c ON c.id = p.cliente_id
+       LEFT JOIN ${S}.cred_clientes c         ON c.id  = p.cliente_id
+       LEFT JOIN ${S}.cred_empresas_propias ep ON ep.id = p.empresa_id
        LEFT JOIN ${S}.cred_productos orig  ON orig.id = p.es_refinanciacion_de
        LEFT JOIN ${S}.cred_productos nuevo ON nuevo.id = p.refinanciado_por
        WHERE p.id=$1`, [id]
@@ -47,7 +49,20 @@ export async function GET(request, { params }) {
     )
     const tiene_pagos = parseInt(pagos.rows[0].total) > 0
 
-    return NextResponse.json({ ...prod.rows[0], cuotas: cuotasConMora, tiene_pagos })
+    // Retornos de empresa (solo si es inversión interna)
+    let retornos = []
+    if (prod.rows[0].empresa_id) {
+      const retRes = await query(
+        `SELECT id, monto_capital, monto_interes, fecha_retorno, notas, usuario_nombre
+         FROM ${S}.cred_retornos_empresa
+         WHERE producto_id=$1
+         ORDER BY fecha_retorno ASC`,
+        [id]
+      ).catch(() => ({ rows: [] }))
+      retornos = retRes.rows
+    }
+
+    return NextResponse.json({ ...prod.rows[0], cuotas: cuotasConMora, tiene_pagos, retornos })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }

@@ -30,6 +30,7 @@ export async function GET(request) {
       cuotasSemana,
       empenosVencer,
       otrosRubros,
+      interesesRetornos,
     ] = await Promise.all([
 
       // 1. Capital y conteo por estado — mora detectada por fechas (no por campo estado)
@@ -203,7 +204,19 @@ export async function GET(request) {
         ORDER BY p.fecha_limite_rescate
       `, [hoy]),
 
-      // 12. Otros rubros activos por tipo (fiado, adelanto, venta, empeno)
+      // 12. Intereses de retornos empresa (no pasan por cred_pagos)
+      query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN r.fecha_retorno = $1::date THEN r.monto_interes END), 0) AS hoy,
+          COALESCE(SUM(CASE WHEN r.fecha_retorno >= DATE_TRUNC('week',  $1::date) THEN r.monto_interes END), 0) AS semana,
+          COALESCE(SUM(CASE WHEN r.fecha_retorno >= DATE_TRUNC('month', $1::date) THEN r.monto_interes END), 0) AS mes,
+          COALESCE(SUM(r.monto_interes), 0) AS total,
+          COALESCE(SUM(CASE WHEN $2::date IS NOT NULL
+            AND r.fecha_retorno BETWEEN $2::date AND $3::date THEN r.monto_interes END), 0) AS rango
+        FROM ${S}.cred_retornos_empresa r
+      `, [hoy, desde, hasta]).catch(() => ({ rows: [{ hoy:0, semana:0, mes:0, total:0, rango:0 }] })),
+
+      // 13. Otros rubros activos por tipo (fiado, adelanto, venta, empeno)
       query(`
         SELECT
           p.tipo,
@@ -224,6 +237,7 @@ export async function GET(request) {
 
     const ce = carteraEstados.rows[0]
     const ip = interesesPeriodos.rows[0]
+    const ir = interesesRetornos.rows[0]
     const mp = moraPeriodos.rows[0]
     const rp = recaudoPeriodos.rows[0]
     const cv = carteraVencida.rows[0]
@@ -240,11 +254,14 @@ export async function GET(request) {
         num_refinanciados:     ce.num_refinanciados,
       },
       intereses: {
-        hoy:    parseFloat(ip.hoy),
-        semana: parseFloat(ip.semana),
-        mes:    parseFloat(ip.mes),
-        total:  parseFloat(ip.total),
-        rango:  parseFloat(ip.rango),
+        hoy:    parseFloat(ip.hoy)    + parseFloat(ir.hoy    || 0),
+        semana: parseFloat(ip.semana) + parseFloat(ir.semana || 0),
+        mes:    parseFloat(ip.mes)    + parseFloat(ir.mes    || 0),
+        total:  parseFloat(ip.total)  + parseFloat(ir.total  || 0),
+        rango:  parseFloat(ip.rango)  + parseFloat(ir.rango  || 0),
+        // Desglose para trazabilidad
+        intereses_prestamos:  parseFloat(ip.total),
+        intereses_retornos:   parseFloat(ir.total || 0),
       },
       mora: {
         clientes_total: mp.clientes_total,

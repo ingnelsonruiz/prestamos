@@ -196,7 +196,7 @@ function NuevoPrestamoContenido() {
   const esEmpeno        = comportamiento === 'empeno'
 
   useEffect(() => {
-    fetch('/api/clientes').then(r=>r.json()).then(setClientes)
+    fetch('/api/clientes').then(r=>r.json()).then(d => setClientes(Array.isArray(d) ? d : []))
     fetch('/api/empresas').then(r=>r.json()).then(d => setEmpresas(Array.isArray(d) ? d.filter(e=>e.activo) : []))
     fetch('/api/configuracion/tipos').then(r=>r.json()).then(data => {
       const activos = Array.isArray(data) ? data.filter(t => t.activo) : []
@@ -343,12 +343,12 @@ function NuevoPrestamoContenido() {
               <div className="col-span-2">
                 <div className="flex rounded-lg border overflow-hidden text-sm font-medium">
                   <button type="button"
-                    onClick={() => { setEsInterno(false); set('empresa_id', ''); set('es_prestamo_interno', false) }}
+                    onClick={() => { setEsInterno(false); set('empresa_id', ''); set('es_prestamo_interno', false); set('tipo','prestamo') }}
                     className={`flex-1 py-2 transition-colors ${!esInterno ? 'bg-primary-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
                     👤 Préstamo a cliente
                   </button>
                   <button type="button"
-                    onClick={() => { setEsInterno(true); set('cliente_id', ''); set('es_prestamo_interno', true); set('tasa_interes','0') }}
+                    onClick={() => { setEsInterno(true); set('cliente_id', ''); set('es_prestamo_interno', true); set('tasa_interes','0'); set('tipo','fiado') }}
                     className={`flex-1 py-2 transition-colors ${esInterno ? 'bg-violet-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
                     🏢 Empresa propia
                   </button>
@@ -384,16 +384,25 @@ function NuevoPrestamoContenido() {
               </div>
             )}
 
-            <div>
-              <label className="text-xs font-medium text-gray-600">Tipo</label>
-              <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
-                value={form.tipo} onChange={e=>set('tipo',e.target.value)}>
-                {tiposList.length === 0 && <option value="prestamo">Préstamo</option>}
-                {tiposList.map(t => (
-                  <option key={t.codigo} value={t.codigo}>{t.icono} {t.label}</option>
-                ))}
-              </select>
-            </div>
+            {esInterno ? (
+              <div>
+                <label className="text-xs font-medium text-gray-600">Tipo</label>
+                <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-violet-50 text-violet-700 font-medium select-none">
+                  💼 Inversión
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="text-xs font-medium text-gray-600">Tipo</label>
+                <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.tipo} onChange={e=>set('tipo',e.target.value)}>
+                  {tiposList.length === 0 && <option value="prestamo">Préstamo</option>}
+                  {tiposList.map(t => (
+                    <option key={t.codigo} value={t.codigo}>{t.icono} {t.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Método — solo préstamo normal y empeño */}
             {!esCuentaAbierta && (
@@ -467,7 +476,10 @@ function NuevoPrestamoContenido() {
             {esCuentaAbierta && (
               <div className="col-span-2 space-y-3">
                 <div className="bg-teal-50 border border-teal-200 rounded-lg px-3 py-2 text-sm text-teal-700">
-                  {tipoActual?.icono} <strong>{tipoActual?.label}</strong> — cuenta abierta sin cuotas fijas ni interés.
+                  {esInterno
+                    ? <>💼 <strong>Inversión</strong> — capital operativo sin cuotas fijas ni interés.</>
+                    : <>{tipoActual?.icono} <strong>{tipoActual?.label}</strong> — cuenta abierta sin cuotas fijas ni interés.</>
+                  }
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Fecha de apertura *</label>
@@ -476,9 +488,11 @@ function NuevoPrestamoContenido() {
                     value={form.fecha_primer_pago} onChange={e=>set('fecha_primer_pago',e.target.value)} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-600">Descripción / motivo</label>
+                  <label className="text-xs font-medium text-gray-600">
+                    {esInterno ? 'Descripción de la inversión' : 'Descripción / motivo'}
+                  </label>
                   <textarea rows={3}
-                    placeholder="Ej: 10 libras de queso, adelanto de nómina junio..."
+                    placeholder={esInterno ? 'Ej: Capital operativo ciclo 1, compra de insumos...' : 'Ej: 10 libras de queso, adelanto de nómina junio...'}
                     className="mt-1 w-full border rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-teal-400"
                     value={form.descripcion_bien} onChange={e=>set('descripcion_bien',e.target.value)} />
                 </div>
@@ -576,7 +590,7 @@ function NuevoPrestamoContenido() {
             }`}>
             {loading ? 'Guardando...'
               : refinanciaId ? '🚀 Confirmar refinanciación y generar cuotas'
-              : esCuentaAbierta ? `Registrar ${tipoActual?.label ?? 'cuenta abierta'}`
+              : esCuentaAbierta ? (esInterno ? 'Registrar Inversión' : `Registrar ${tipoActual?.label ?? 'cuenta abierta'}`)
               : 'Crear y generar cuotas'}
           </button>
         </form>

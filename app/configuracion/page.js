@@ -30,11 +30,19 @@ function TipoBadge({ tipo }) {
 export default function ConfiguracionPage() {
   const [tipos,      setTipos]      = useState([])
   const [loading,    setLoading]    = useState(true)
-  const [modal,      setModal]      = useState(false)       // crear
-  const [editItem,   setEditItem]   = useState(null)        // editar
+  const [modal,      setModal]      = useState(false)
+  const [editItem,   setEditItem]   = useState(null)
   const [saving,     setSaving]     = useState(false)
-  const [msg,        setMsg]        = useState(null)        // { ok, text }
-  const [confirmDel, setConfirmDel] = useState(null)        // tipo a eliminar
+  const [msg,        setMsg]        = useState(null)
+  const [confirmDel, setConfirmDel] = useState(null)
+
+  // ── Tipos de gasto ──
+  const [tiposGasto,    setTiposGasto]    = useState([])
+  const [loadingGasto,  setLoadingGasto]  = useState(true)
+  const [modalGasto,    setModalGasto]    = useState(false)
+  const [savingGasto,   setSavingGasto]   = useState(false)
+  const [formGasto,     setFormGasto]     = useState({ nombre: '' })
+  const [confirmDelG,   setConfirmDelG]   = useState(null)
 
   const EMPTY = { label: '', icono: '📋', descripcion: '', comportamiento: 'prestamo_normal', orden: 99 }
   const [form, setForm] = useState(EMPTY)
@@ -48,7 +56,15 @@ export default function ConfiguracionPage() {
     setLoading(false)
   }
 
-  useEffect(() => { cargar() }, [])
+  const cargarGastos = async () => {
+    setLoadingGasto(true)
+    const res = await fetch('/api/tipos-gasto')
+    const data = await res.json()
+    setTiposGasto(Array.isArray(data) ? data : [])
+    setLoadingGasto(false)
+  }
+
+  useEffect(() => { cargar(); cargarGastos() }, [])
 
   const flash = (ok, text) => {
     setMsg({ ok, text })
@@ -94,6 +110,30 @@ export default function ConfiguracionPage() {
   }
 
   const cerrarModal = () => { setModal(false); setEditItem(null); setForm(EMPTY) }
+
+  // ── CRUD tipos de gasto ──
+  const guardarGasto = async () => {
+    if (!formGasto.nombre.trim()) return flash(false, 'El nombre es obligatorio')
+    setSavingGasto(true)
+    const res = await fetch('/api/tipos-gasto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre: formGasto.nombre }),
+    })
+    const data = await res.json()
+    setSavingGasto(false)
+    if (!res.ok) { flash(false, data.error); return }
+    flash(true, `Tipo de gasto "${data.nombre}" creado`)
+    setModalGasto(false); setFormGasto({ nombre: '' }); cargarGastos()
+  }
+
+  const eliminarGasto = async (tg) => {
+    const res  = await fetch(`/api/tipos-gasto/${tg.id}`, { method: 'DELETE' })
+    const data = await res.json()
+    if (!res.ok) { flash(false, data.error); setConfirmDelG(null); return }
+    flash(true, `Tipo "${tg.nombre}" eliminado`)
+    setConfirmDelG(null); cargarGastos()
+  }
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -187,6 +227,47 @@ export default function ConfiguracionPage() {
                     </button>
                   )}
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Tipos de gasto ── */}
+      <div className="bg-white rounded-2xl border overflow-hidden shadow-sm">
+        <div className="px-6 py-4 border-b bg-gray-50 flex items-center gap-2">
+          <span>🏷️</span>
+          <p className="text-sm font-bold text-gray-700">Tipos de gasto configurados</p>
+          <span className="ml-auto text-xs text-gray-400">{tiposGasto.length} tipos</span>
+          <button onClick={() => { setFormGasto({ nombre: '' }); setModalGasto(true) }}
+            className="bg-[#1e3a5f] text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-blue-900 transition-colors flex items-center gap-1">
+            + Nuevo
+          </button>
+        </div>
+
+        {loadingGasto ? (
+          <div className="p-8 text-center text-gray-400 text-sm">Cargando...</div>
+        ) : (
+          <div className="divide-y">
+            {tiposGasto.map(tg => (
+              <div key={tg.id} className={`flex items-center gap-4 px-6 py-3.5 hover:bg-gray-50 transition-colors ${!tg.activo ? 'opacity-50' : ''}`}>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-gray-800 text-sm">{tg.nombre}</p>
+                    {tg.es_sistema && <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-semibold">Sistema</span>}
+                    {!tg.activo && <span className="text-xs bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full">Inactivo</span>}
+                  </div>
+                </div>
+                {!tg.es_sistema && (
+                  <button onClick={() => setConfirmDelG(tg)}
+                    className="p-2 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                    title="Eliminar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
+                      <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                    </svg>
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -290,7 +371,7 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
-      {/* ══ MODAL CONFIRMAR ELIMINACIÓN ══ */}
+      {/* ══ MODAL CONFIRMAR ELIMINACIÓN (préstamo) ══ */}
       {confirmDel && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
@@ -310,6 +391,52 @@ export default function ConfiguracionPage() {
                 className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700">
                 Eliminar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ MODAL NUEVO TIPO DE GASTO ══ */}
+      {modalGasto && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="px-6 py-5 border-b flex items-center justify-between">
+              <h3 className="font-bold text-gray-800">🏷️ Nuevo tipo de gasto</h3>
+              <button onClick={() => setModalGasto(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+            <div className="px-6 py-5">
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Nombre *</label>
+              <input type="text" value={formGasto.nombre}
+                onChange={e => setFormGasto({ nombre: e.target.value.toUpperCase() })}
+                placeholder="Ej: Veterinario, Publicidad..."
+                className="w-full border rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-400 uppercase" />
+            </div>
+            <div className="px-6 py-4 border-t flex gap-3 justify-end bg-gray-50 rounded-b-2xl">
+              <button onClick={() => setModalGasto(false)}
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-200">Cancelar</button>
+              <button onClick={guardarGasto} disabled={savingGasto}
+                className="px-5 py-2 bg-[#1e3a5f] text-white rounded-xl text-sm font-bold hover:bg-blue-900 disabled:opacity-50">
+                {savingGasto ? 'Guardando...' : 'Crear tipo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ MODAL CONFIRMAR ELIMINACIÓN (gasto) ══ */}
+      {confirmDelG && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="text-center">
+              <p className="text-4xl mb-2">⚠️</p>
+              <h3 className="font-bold text-gray-800">¿Eliminar tipo de gasto?</h3>
+              <p className="text-sm text-gray-500 mt-1">Se eliminará <strong>"{confirmDelG.nombre}"</strong>.</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDelG(null)}
+                className="flex-1 py-2.5 rounded-xl border text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancelar</button>
+              <button onClick={() => eliminarGasto(confirmDelG)}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-bold hover:bg-red-700">Eliminar</button>
             </div>
           </div>
         </div>

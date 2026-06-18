@@ -22,7 +22,7 @@ export default function DetallePrestamo() {
   const [saving, setSaving]             = useState(false)
   const [saveError, setSaveError]       = useState('')
   const [modalLiquidar, setModalLiquidar] = useState(false)
-  const [liquidForm, setLiquidForm]     = useState({ monto: '', metodo: 'efectivo', notas: '', fecha: '' })
+  const [liquidForm, setLiquidForm]     = useState({ monto: '', monto_interes: '', metodo: 'efectivo', notas: '', fecha: '' })
   const [liquidando, setLiquidando]     = useState(false)
   const [liquidError, setLiquidError]   = useState('')
   const [liquidOk, setLiquidOk]         = useState(null)
@@ -136,6 +136,7 @@ export default function DetallePrestamo() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         monto_acordado: monto,
+        monto_interes:  parseFloat(liquidForm.monto_interes || 0) || 0,
         metodo_pago:    liquidForm.metodo,
         notas:          liquidForm.notas,
         fecha_pago:     liquidForm.fecha || fechaDefault,
@@ -236,7 +237,7 @@ export default function DetallePrestamo() {
         <div className="flex items-center gap-2 text-sm text-gray-500">
           <Link href="/prestamos" className="hover:text-gray-700">← Préstamos</Link>
           <span>/</span>
-          <span className="text-gray-700 font-medium">{data.nombre_cliente}</span>
+          <span className="text-gray-700 font-medium">{data.nombre_cliente || data.nombre_empresa || '—'}</span>
         </div>
         <div className="flex gap-2">
           {puedeEditar && (
@@ -262,7 +263,7 @@ export default function DetallePrestamo() {
                 </button>
               )}
               <button
-                onClick={() => { setLiquidForm({ monto: String(Math.round(saldoPendiente)), metodo: 'efectivo', notas: '', fecha: '' }); setLiquidError(''); setModalLiquidar(true) }}
+                onClick={() => { setLiquidForm({ monto: String(Math.round(saldoPendiente)), monto_interes: '', metodo: 'efectivo', notas: '', fecha: '' }); setLiquidError(''); setModalLiquidar(true) }}
                 className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700">
                 💵 Liquidar crédito
               </button>
@@ -773,6 +774,87 @@ export default function DetallePrestamo() {
         </div>
       )}
 
+      {/* ── Historial de retornos (solo inversiones internas) ───────────────── */}
+      {data.empresa_id && (data.retornos?.length > 0) && (
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="px-6 py-4 border-b flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h3 className="font-semibold text-gray-700">📥 Retornos de esta inversión</h3>
+              <span className="text-xs bg-violet-100 text-violet-700 font-bold px-2.5 py-1 rounded-lg">
+                {data.retornos.length} registros
+              </span>
+            </div>
+            {(() => {
+              const totalCap = data.retornos.reduce((s,r) => s + parseFloat(r.monto_capital||0), 0)
+              const totalInt = data.retornos.reduce((s,r) => s + parseFloat(r.monto_interes||0), 0)
+              return (
+                <div className="flex gap-4 text-sm">
+                  <div className="text-right">
+                    <p className="text-xs text-gray-400">Capital recibido</p>
+                    <p className="font-bold text-blue-600">{fmt(totalCap)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-gray-400">Ganancia total</p>
+                    <p className="font-bold text-emerald-600">{fmt(totalInt)}</p>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
+              <tr>
+                <th className="text-left px-4 py-3">Fecha</th>
+                <th className="text-right px-4 py-3">Capital</th>
+                <th className="text-right px-4 py-3">Interés / Ganancia</th>
+                <th className="text-right px-4 py-3">Total</th>
+                <th className="text-left px-4 py-3">Notas</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {data.retornos.map(r => (
+                <tr key={r.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 text-gray-600">
+                    {new Date(r.fecha_retorno).toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'})}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-blue-600 font-semibold">
+                    {fmt(r.monto_capital)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    {parseFloat(r.monto_interes||0) > 0
+                      ? <span className="font-bold text-emerald-600">+ {fmt(r.monto_interes)}</span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-bold text-gray-800">
+                    {fmt(parseFloat(r.monto_capital||0) + parseFloat(r.monto_interes||0))}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-gray-400">
+                    {r.notas?.includes('COBRO FINAL')
+                      ? <span className="bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full">🏁 Cobro final</span>
+                      : (r.notas || '—')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="border-t-2 border-gray-300 bg-violet-50 font-bold text-sm">
+              <tr>
+                <td className="px-4 py-3 text-violet-700 text-xs uppercase tracking-wide">Total</td>
+                <td className="px-4 py-3 text-right text-blue-700">
+                  {fmt(data.retornos.reduce((s,r) => s + parseFloat(r.monto_capital||0), 0))}
+                </td>
+                <td className="px-4 py-3 text-right text-emerald-700">
+                  {fmt(data.retornos.reduce((s,r) => s + parseFloat(r.monto_interes||0), 0))}
+                </td>
+                <td className="px-4 py-3 text-right text-violet-800">
+                  {fmt(data.retornos.reduce((s,r) => s + parseFloat(r.monto_capital||0) + parseFloat(r.monto_interes||0), 0))}
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
       {/* Modal Convertir a préstamo */}
       {modalConvertir && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -956,6 +1038,31 @@ export default function DetallePrestamo() {
                   value={liquidForm.fecha}
                   onChange={e => setLiquidForm(f => ({ ...f, fecha: e.target.value }))} />
               </div>
+
+              {/* Interés adicional (solo inversiones internas) */}
+              {data.empresa_id && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 space-y-2">
+                  <p className="text-xs font-bold text-emerald-700 uppercase tracking-wide">📈 Ganancia de esta inversión</p>
+                  <p className="text-xs text-emerald-600">El interés que registres aquí se contabilizará como ganancia de la empresa. No se abona a ningún otro crédito.</p>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-400 font-semibold text-sm">$</span>
+                    <input
+                      type="text" inputMode="numeric" placeholder="0"
+                      className="w-full border-2 border-emerald-300 rounded-xl pl-7 pr-4 py-2.5 text-base font-bold focus:outline-none focus:border-emerald-500"
+                      value={liquidForm.monto_interes ? Number(liquidForm.monto_interes).toLocaleString('es-CO') : ''}
+                      onChange={e => {
+                        const raw = e.target.value.replace(/\./g,'').replace(/,/g,'.').replace(/[^\d]/g,'')
+                        setLiquidForm(f => ({ ...f, monto_interes: raw }))
+                      }} />
+                  </div>
+                  {liquidForm.monto_interes > 0 && (
+                    <p className="text-xs text-emerald-500">
+                      Total a recibir: <strong>{fmt((parseFloat(liquidForm.monto)||0) + (parseFloat(liquidForm.monto_interes)||0))}</strong>
+                      {' '}({fmt(parseFloat(liquidForm.monto)||0)} capital + {fmt(parseFloat(liquidForm.monto_interes)||0)} ganancia)
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Notas */}
               <div>

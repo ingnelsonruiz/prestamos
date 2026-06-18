@@ -27,8 +27,8 @@ export async function GET(request) {
              p.metodo_calculo   AS metodo_calculo_producto,
              GREATEST(0, CURRENT_DATE - cu.fecha_vencimiento) AS dias_mora
       FROM ${S}.cred_cuotas cu
-      JOIN ${S}.cred_clientes  c ON c.id = cu.cliente_id
-      JOIN ${S}.cred_productos p ON p.id = cu.producto_id
+      LEFT JOIN ${S}.cred_clientes  c ON c.id = cu.cliente_id
+      JOIN      ${S}.cred_productos p ON p.id = cu.producto_id
       WHERE p.estado != 'refinanciado'
     `
     const values = []

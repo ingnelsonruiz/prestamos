@@ -11,8 +11,13 @@ export async function POST(request) {
     // Borrar en orden correcto (FK constraints)
     await query(`DELETE FROM ${S}.cred_movimientos_caja`)
     await query(`DELETE FROM ${S}.cred_pagos`)
+    await query(`DELETE FROM ${S}.cred_historial_recalculos`)
     await query(`DELETE FROM ${S}.cred_cuotas`)
     await query(`DELETE FROM ${S}.cred_productos`)
+    // Tablas del módulo de empresas propias
+    await query(`DELETE FROM ${S}.cred_retornos_empresa`)
+    await query(`DELETE FROM ${S}.cred_gastos`)
+    // Resetear consecutivos
     await query(`UPDATE ${S}.cred_configuracion SET valor='1', actualizado_en=NOW() WHERE clave='recibo_consecutivo'`)
     await query(`UPDATE ${S}.cred_configuracion SET valor='1', actualizado_en=NOW() WHERE clave='credito_consecutivo'`)
 

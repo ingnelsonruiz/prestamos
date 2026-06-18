@@ -5,7 +5,8 @@ import Link from 'next/link'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
 
-const tipoColor  = { prestamo:'bg-blue-100 text-blue-700', venta:'bg-yellow-100 text-yellow-700', empeno:'bg-purple-100 text-purple-700', fiado:'bg-green-100 text-green-700', adelanto:'bg-teal-100 text-teal-700' }
+const tipoColor  = { prestamo:'bg-blue-100 text-blue-700', venta:'bg-yellow-100 text-yellow-700', empeno:'bg-purple-100 text-purple-700', fiado:'bg-green-100 text-green-700', adelanto:'bg-teal-100 text-teal-700', inversion:'bg-violet-100 text-violet-700' }
+const tipoLabel  = { prestamo:'Préstamo', venta:'Venta', empeno:'Empeño', fiado:'Fiado', adelanto:'Adelanto' }
 const estadoBadge = { activo:'bg-blue-100 text-blue-700', al_dia:'bg-green-100 text-green-700', en_mora:'bg-red-100 text-red-700', saldado:'bg-emerald-100 text-emerald-700', refinanciado:'bg-purple-100 text-purple-700' }
 
 // Wrapper requerido por Next.js 15: useSearchParams debe estar dentro de <Suspense>
@@ -24,6 +25,7 @@ function PrestamosContent() {
   const valoresFiltro = ['activos','todos','saldado','en_mora','refinanciado']
   const filtroInicial = valoresFiltro.includes(searchParams.get('filtro')) ? searchParams.get('filtro') : 'activos'
   const [filtroEstado, setFiltroEstado] = useState(filtroInicial)
+  const [segmento, setSegmento]         = useState('todos') // 'todos' | 'clientes' | 'empresas'
 
   useEffect(() => {
     fetch('/api/productos').then(r=>r.json()).then(setProductos)
@@ -32,14 +34,30 @@ function PrestamosContent() {
   const filtrados = productos.filter(p => {
     const q = buscar.toLowerCase()
     const matchBuscar = !q || p.nombre_cliente?.toLowerCase().includes(q) || p.documento?.toLowerCase().includes(q)
-    const matchEstado = filtroEstado === 'todos' || (filtroEstado === 'activos' && !['saldado','refinanciado'].includes(p.estado)) || filtroEstado === p.estado
-    return matchBuscar && matchEstado
+      || p.nombre_empresa?.toLowerCase().includes(q) || p.descripcion_bien?.toLowerCase().includes(q)
+    const matchEstado   = filtroEstado === 'todos' || (filtroEstado === 'activos' && !['saldado','refinanciado'].includes(p.estado)) || filtroEstado === p.estado
+    const matchSegmento = segmento === 'todos'
+      || (segmento === 'clientes'  && !p.es_prestamo_interno)
+      || (segmento === 'empresas'  &&  p.es_prestamo_interno)
+    return matchBuscar && matchEstado && matchSegmento
   })
 
-  // Agrupar por cliente para resumen
+  // KPIs rápidos por segmento
+  const kpiClientes = productos.filter(p => !p.es_prestamo_interno && !['saldado','refinanciado'].includes(p.estado))
+  const kpiEmpresas = productos.filter(p =>  p.es_prestamo_interno && !['saldado','refinanciado'].includes(p.estado))
+
+  // Agrupar por cliente o empresa según el tipo
   const porCliente = filtrados.reduce((acc, p) => {
-    if (!acc[p.cliente_id]) acc[p.cliente_id] = { nombre: p.nombre_cliente, documento: p.documento, telefono: p.telefono, direccion: p.direccion, items: [] }
-    acc[p.cliente_id].items.push(p)
+    const key = p.es_prestamo_interno ? `emp_${p.empresa_id}` : p.cliente_id
+    if (!acc[key]) acc[key] = {
+      nombre:       p.es_prestamo_interno ? (p.nombre_empresa || 'Empresa interna') : p.nombre_cliente,
+      documento:    p.es_prestamo_interno ? (p.codigo_empresa || '') : p.documento,
+      telefono:     p.es_prestamo_interno ? null : p.telefono,
+      direccion:    p.es_prestamo_interno ? (p.nit_empresa ? `NIT: ${p.nit_empresa}` : null) : p.direccion,
+      esEmpresa:    p.es_prestamo_interno || false,
+      items: []
+    }
+    acc[key].items.push(p)
     return acc
   }, {})
 
@@ -52,9 +70,66 @@ function PrestamosContent() {
         </Link>
       </div>
 
+      {/* Segmentador Clientes / Empresas */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          {
+            key: 'todos',
+            label: 'Todos',
+            icon: '📋',
+            count: productos.filter(p => !['saldado','refinanciado'].includes(p.estado)).length,
+            deuda: productos.filter(p => !['saldado','refinanciado'].includes(p.estado)).reduce((s,p)=>s+parseFloat(p.capital_pendiente||0),0),
+            bg: 'from-gray-700 to-gray-500',
+            activeBorder: 'border-gray-500',
+          },
+          {
+            key: 'clientes',
+            label: 'Clientes',
+            icon: '👥',
+            count: kpiClientes.length,
+            deuda: kpiClientes.reduce((s,p)=>s+parseFloat(p.capital_pendiente||0),0),
+            bg: 'from-blue-700 to-blue-500',
+            activeBorder: 'border-blue-500',
+          },
+          {
+            key: 'empresas',
+            label: 'Empresas',
+            icon: '🏢',
+            count: kpiEmpresas.length,
+            deuda: kpiEmpresas.reduce((s,p)=>s+parseFloat(p.capital_pendiente||0),0),
+            bg: 'from-violet-700 to-violet-500',
+            activeBorder: 'border-violet-500',
+          },
+        ].map(seg => (
+          <button key={seg.key} onClick={() => setSegmento(seg.key)}
+            className={`rounded-xl border-2 p-4 text-left transition-all
+              ${segmento === seg.key
+                ? `bg-white ${seg.activeBorder} shadow-md`
+                : 'bg-white border-gray-200 hover:border-gray-300 opacity-70 hover:opacity-100'
+              }`}>
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm bg-gradient-to-br ${seg.bg} text-white`}>
+                {seg.icon}
+              </span>
+              <span className={`text-xs font-bold uppercase tracking-wide ${segmento===seg.key ? 'text-gray-700' : 'text-gray-400'}`}>
+                {seg.label}
+              </span>
+              {segmento === seg.key && <span className="ml-auto w-2 h-2 rounded-full bg-green-500"/>}
+            </div>
+            <p className={`text-xl font-black ${segmento===seg.key ? 'text-gray-900' : 'text-gray-500'}`}>
+              {seg.count} <span className="text-xs font-normal text-gray-400">activos</span>
+            </p>
+            <p className={`text-sm font-bold mt-0.5 ${segmento===seg.key ? 'text-red-600' : 'text-gray-400'}`}>
+              {fmt(seg.deuda)}
+            </p>
+          </button>
+        ))}
+      </div>
+
       {/* Búsqueda + filtros */}
       <div className="flex flex-col gap-3">
-        <input type="text" placeholder="Buscar por nombre o cédula..."
+        <input type="text"
+          placeholder={segmento === 'empresas' ? 'Buscar por empresa o descripción...' : 'Buscar por nombre o cédula...'}
           className="w-full border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           value={buscar} onChange={e => setBuscar(e.target.value)} />
         <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
@@ -79,20 +154,26 @@ function PrestamosContent() {
               <div className="px-5 py-4 bg-gray-50 border-b flex justify-between items-start gap-4">
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
+                    {cli.esEmpresa && <span className="text-lg">🏢</span>}
                     <span className="font-bold text-gray-900 text-base">{cli.nombre}</span>
-                    <span className="text-xs text-gray-400 font-mono">CC {cli.documento}</span>
+                    {cli.documento && (
+                      <span className={`text-xs font-mono px-2 py-0.5 rounded ${cli.esEmpresa ? 'bg-violet-100 text-violet-600' : 'text-gray-400'}`}>
+                        {cli.esEmpresa ? cli.documento : `CC ${cli.documento}`}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                    {cli.telefono
-                      ? <a href={`tel:${cli.telefono}`}
-                          className="flex items-center gap-1.5 text-sm font-bold text-white bg-green-600 px-3 py-1 rounded-full hover:bg-green-700 transition-colors shadow-sm">
-                          📞 {cli.telefono}
-                        </a>
-                      : <span className="text-sm font-semibold text-red-500">📞 Sin teléfono registrado</span>
-                    }
+                    {!cli.esEmpresa && (
+                      cli.telefono
+                        ? <a href={`tel:${cli.telefono}`}
+                            className="flex items-center gap-1.5 text-sm font-bold text-white bg-green-600 px-3 py-1 rounded-full hover:bg-green-700 transition-colors shadow-sm">
+                            📞 {cli.telefono}
+                          </a>
+                        : <span className="text-sm font-semibold text-red-500">📞 Sin teléfono registrado</span>
+                    )}
                     {cli.direccion && (
                       <span className="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
-                        📍 {cli.direccion}
+                        {cli.esEmpresa ? '🪪' : '📍'} {cli.direccion}
                       </span>
                     )}
                   </div>
@@ -125,8 +206,8 @@ function PrestamosContent() {
                     <tr key={p.id} className={`hover:bg-gray-50 ${p.estado==='en_mora'?'bg-red-50/40':p.estado==='refinanciado'?'opacity-60':''}`}>
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`text-sm px-2.5 py-0.5 rounded-full font-semibold ${tipoColor[p.tipo]||'bg-gray-100 text-gray-600'}`}>
-                            {p.tipo}
+                          <span className={`text-sm px-2.5 py-0.5 rounded-full font-semibold ${p.es_prestamo_interno ? tipoColor.inversion : (tipoColor[p.tipo]||'bg-gray-100 text-gray-600')}`}>
+                            {p.es_prestamo_interno ? '💼 Inversión' : (tipoLabel[p.tipo] || p.tipo)}
                           </span>
                           {p.referencia && (
                             <span className="text-sm font-black font-mono bg-indigo-600 text-white px-3 py-1 rounded-lg shadow-sm">

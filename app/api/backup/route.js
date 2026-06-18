@@ -86,6 +86,7 @@ export async function GET(request) {
       },
     })
   } catch (error) {
+    console.error('[BACKUP GET ERROR]', error.message, error.stack)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
@@ -102,14 +103,8 @@ export async function POST(request) {
     if (!tablas || !version)
       return NextResponse.json({ error: 'Archivo de backup inválido o corrupto' }, { status: 400 })
 
-    // ── Limpiar tablas en orden inverso de dependencias ───────────────────
-    await query(`TRUNCATE ${S}.cred_pagos`)
-    await query(`TRUNCATE ${S}.cred_historial_recalculos`)
-    await query(`TRUNCATE ${S}.cred_cuotas`)
-    await query(`TRUNCATE ${S}.cred_movimientos_caja`)
-    await query(`TRUNCATE ${S}.cred_productos`)
-    await query(`TRUNCATE ${S}.cred_clientes`)
-    await query(`TRUNCATE ${S}.cred_configuracion`)
+    // ── Limpiar tablas con CASCADE para respetar FK ───────────────────
+    await query(`TRUNCATE ${S}.cred_pagos, ${S}.cred_historial_recalculos, ${S}.cred_cuotas, ${S}.cred_movimientos_caja, ${S}.cred_productos, ${S}.cred_clientes, ${S}.cred_configuracion CASCADE`)
     // Usuarios: no truncar — solo restaurar los del backup sin eliminar al actual
     // (evita quedarse sin acceso si el backup no tiene el usuario actual)
 
@@ -179,8 +174,8 @@ export async function POST(request) {
         if (row.id === u.id) continue  // nunca sobreescribir al usuario que restaura
         await query(
           `INSERT INTO ${S}.cred_usuarios (id,nombre,usuario,password_hash,rol,activo,ultimo_acceso)
-           VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO UPDATE
-           SET nombre=$2, usuario=$3, password_hash=$4, rol=$5, activo=$6`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT DO NOTHING`,
           [row.id, row.nombre, row.usuario, row.password_hash,
            row.rol, row.activo, row.ultimo_acceso || null]
         )
@@ -204,6 +199,7 @@ export async function POST(request) {
 
     return NextResponse.json({ ok: true, mensaje: 'Restauración completada exitosamente' })
   } catch (error) {
+    console.error('[BACKUP POST ERROR]', error.message, error.stack)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
