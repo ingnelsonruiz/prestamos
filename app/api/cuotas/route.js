@@ -11,6 +11,8 @@ export async function GET(request) {
     const productoId = searchParams.get('producto_id')
     const hoy        = new Date().toISOString().split('T')[0]
 
+    const segmento = searchParams.get('segmento') // 'clientes' | 'empresas' | null=todos
+
     let sql = `
       SELECT cu.*,
              c.nombre    AS nombre_cliente,
@@ -25,10 +27,13 @@ export async function GET(request) {
              p.frecuencia_cobro AS frecuencia_cobro_producto,
              p.num_cuotas       AS num_cuotas_producto,
              p.metodo_calculo   AS metodo_calculo_producto,
+             p.empresa_id       AS empresa_id,
+             ep.nombre          AS empresa_nombre,
              GREATEST(0, CURRENT_DATE - cu.fecha_vencimiento) AS dias_mora
       FROM ${S}.cred_cuotas cu
-      LEFT JOIN ${S}.cred_clientes  c ON c.id = cu.cliente_id
-      JOIN      ${S}.cred_productos p ON p.id = cu.producto_id
+      LEFT JOIN ${S}.cred_clientes       c  ON c.id  = cu.cliente_id
+      JOIN      ${S}.cred_productos      p  ON p.id  = cu.producto_id
+      LEFT JOIN ${S}.cred_empresas_propias ep ON ep.id = p.empresa_id
       WHERE p.estado != 'refinanciado'
     `
     const values = []
@@ -43,6 +48,8 @@ export async function GET(request) {
       values.push(estado)
     }
 
+    if (segmento === 'clientes')  sql += ` AND p.empresa_id IS NULL`
+    if (segmento === 'empresas')  sql += ` AND p.empresa_id IS NOT NULL`
     if (clienteId)  { sql += ` AND cu.cliente_id=$${values.length+1}`;  values.push(clienteId) }
     if (productoId) { sql += ` AND cu.producto_id=$${values.length+1}`; values.push(productoId) }
     sql += ` ORDER BY cu.fecha_vencimiento ASC`

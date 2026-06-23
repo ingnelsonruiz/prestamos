@@ -175,11 +175,14 @@ function NuevoPrestamoContenido() {
   const clientePresel  = searchParams.get('cliente') || ''
   const capitalPresel  = searchParams.get('capital') || ''
   const refinanciaId   = searchParams.get('refinancia') || ''
+  const esCongelar     = searchParams.get('congelar') === '1'
 
   const [form, setForm] = useState({
     ...init,
     cliente_id:    clientePresel,
     monto_capital: capitalPresel || '',
+    // Congelación: difiere la deuda total sin interés nuevo
+    ...(esCongelar ? { tipo:'congelacion', con_interes:false, tasa_interes:'0' } : {}),
   })
   const [clientes,   setClientes]   = useState([])
   const [tiposList,  setTiposList]  = useState([])
@@ -287,23 +290,26 @@ function NuevoPrestamoContenido() {
 
       {/* ── Hero de refinanciación: contexto completo en un vistazo ── */}
       {refinanciaId && (
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-violet-700 via-purple-600 to-fuchsia-600 text-white shadow-lg animate-pop">
+        <div className={`relative overflow-hidden rounded-2xl text-white shadow-lg animate-pop bg-gradient-to-r ${esCongelar ? 'from-cyan-700 via-sky-600 to-cyan-500' : 'from-violet-700 via-purple-600 to-fuchsia-600'}`}>
           <div className="absolute -top-12 -right-12 w-44 h-44 rounded-full bg-white/10" />
           <div className="absolute -bottom-14 left-1/3 w-32 h-32 rounded-full bg-white/10" />
           <div className="relative px-6 py-5 flex flex-wrap items-center gap-x-6 gap-y-3">
             <div className="w-12 h-12 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center text-2xl shrink-0">
-              🔄
+              {esCongelar ? '❄️' : '🔄'}
             </div>
             <div className="flex-1 min-w-[200px]">
-              <p className="text-lg font-extrabold tracking-tight leading-tight">Refinanciación de saldo</p>
+              <p className="text-lg font-extrabold tracking-tight leading-tight">
+                {esCongelar ? 'Congelación de saldo' : 'Refinanciación de saldo'}
+              </p>
               <p className="text-white/75 text-xs mt-0.5">
-                {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — el capital
-                pendiente ya está pre-llenado. Ajusta tasa, cuotas y fecha, y confirma.
+                {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — {esCongelar
+                  ? <>la deuda total ya está pre-llenada. Se difiere <strong className="text-white">sin interés adicional</strong>: solo define cuotas y frecuencia.</>
+                  : <>el capital pendiente ya está pre-llenado. Ajusta tasa, cuotas y fecha, y confirma.</>}
               </p>
             </div>
             {capitalPresel && (
               <div className="bg-white/15 border border-white/25 rounded-xl px-4 py-2 text-center shrink-0">
-                <p className="text-[10px] uppercase tracking-widest text-white/70 font-bold">Capital a refinanciar</p>
+                <p className="text-[10px] uppercase tracking-widest text-white/70 font-bold">{esCongelar ? 'Saldo a congelar' : 'Capital a refinanciar'}</p>
                 <p className="text-xl font-black">{fmt(parseFloat(capitalPresel))}</p>
               </div>
             )}
@@ -321,7 +327,7 @@ function NuevoPrestamoContenido() {
             <span className="text-white/40">━━</span>
             <span className="flex items-center gap-1.5 text-white">
               <span className="w-4 h-4 rounded-full bg-white text-purple-700 flex items-center justify-center text-[9px] font-black">2</span>
-              Nuevas condiciones
+              {esCongelar ? 'Cuotas sin interés' : 'Nuevas condiciones'}
             </span>
             <span className="text-white/40">━━</span>
             <span className="flex items-center gap-1.5 text-white/60">
@@ -391,6 +397,13 @@ function NuevoPrestamoContenido() {
                   💼 Inversión
                 </div>
               </div>
+            ) : esCongelar ? (
+              <div>
+                <label className="text-xs font-medium text-gray-600">Tipo</label>
+                <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
+                  ❄️ Congelación
+                </div>
+              </div>
             ) : (
               <div>
                 <label className="text-xs font-medium text-gray-600">Tipo</label>
@@ -436,8 +449,14 @@ function NuevoPrestamoContenido() {
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Tasa (%)</label>
-                  <input type="number" step="0.01" min="0" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
-                    value={form.tasa_interes} onChange={e=>set('tasa_interes',e.target.value)} />
+                  {esCongelar ? (
+                    <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
+                      0% — sin interés ❄️
+                    </div>
+                  ) : (
+                    <input type="number" step="0.01" min="0" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                      value={form.tasa_interes} onChange={e=>set('tasa_interes',e.target.value)} />
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Período tasa</label>
@@ -584,11 +603,14 @@ function NuevoPrestamoContenido() {
 
           <button type="submit" disabled={loading}
             className={`w-full text-white rounded-lg py-2.5 font-medium disabled:opacity-50 ${
-              refinanciaId
+              esCongelar
+                ? 'bg-gradient-to-r from-cyan-600 to-sky-600 font-bold shadow-lg shadow-cyan-500/30 hover:shadow-cyan-500/50 transition-all'
+                : refinanciaId
                 ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 font-bold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/50 transition-all'
                 : 'bg-primary-600 hover:bg-primary-700'
             }`}>
             {loading ? 'Guardando...'
+              : esCongelar ? '❄️ Congelar y generar cuotas sin interés'
               : refinanciaId ? '🚀 Confirmar refinanciación y generar cuotas'
               : esCuentaAbierta ? (esInterno ? 'Registrar Inversión' : `Registrar ${tipoActual?.label ?? 'cuenta abierta'}`)
               : 'Crear y generar cuotas'}

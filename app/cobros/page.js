@@ -30,6 +30,7 @@ export default function CobrosPage() {
   const [historialPagos, setHistorialPagos] = useState({})  // keyed by producto_id
   const [alertaRefinanciar, setAlertaRefinanciar] = useState(null) // { productoId, capitalPendiente, nombreCliente }
   const [envio, setEnvio] = useState(null) // { tramoKey, tramoLabel, lista:[...], idx, enviados:{} }
+  const [segmento, setSegmento] = useState('clientes') // 'clientes' | 'empresas' | 'todos'
 
   // Fecha local sin desfase UTC
   const hoy = (() => {
@@ -37,10 +38,11 @@ export default function CobrosPage() {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
   })()
 
-  const cargar = async () => {
+  const cargar = async (seg = segmento) => {
+    const qs = seg === 'todos' ? '' : `&segmento=${seg}`
     const [pend, parc] = await Promise.all([
-      fetch('/api/cuotas?estado=pendiente').then(r=>r.json()).then(d=>Array.isArray(d)?d:[]),
-      fetch('/api/cuotas?estado=parcial').then(r=>r.json()).then(d=>Array.isArray(d)?d:[]),
+      fetch(`/api/cuotas?estado=pendiente${qs}`).then(r=>r.json()).then(d=>Array.isArray(d)?d:[]),
+      fetch(`/api/cuotas?estado=parcial${qs}`).then(r=>r.json()).then(d=>Array.isArray(d)?d:[]),
     ])
     const todas = [...pend, ...parc].sort((a,b) =>
       new Date(a.fecha_vencimiento) - new Date(b.fecha_vencimiento)
@@ -59,6 +61,8 @@ export default function CobrosPage() {
           capital:        c.capital_producto,
           referencia:     c.referencia_producto,
           num_cuotas:     c.num_cuotas_producto,
+          empresa_id:     c.empresa_id,
+          empresa_nombre: c.empresa_nombre,
           cuotas: []
         }
       }
@@ -67,11 +71,11 @@ export default function CobrosPage() {
     setGrupos(Object.values(map).sort((a,b) =>
       new Date(b.fecha_prestamo) - new Date(a.fecha_prestamo)
     ))
-    setAbiertos({})         // cerrado por defecto
-    setHistorialPagos({})   // limpiar historial para forzar re-fetch
+    setAbiertos({})
+    setHistorialPagos({})
   }
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => { cargar(segmento) }, [segmento])
 
   const fetchHistorial = id => {
     fetch(`/api/historial?producto_id=${id}`)
@@ -500,6 +504,25 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
         </button>
       </div>
 
+      {/* ═══ SEGMENTADOR: Clientes / Empresas / Todos ═══ */}
+      <div className="flex items-center gap-2 bg-white border rounded-xl p-1 shadow-sm w-fit">
+        {[
+          { k:'clientes', icon:'👤', label:'Clientes' },
+          { k:'empresas', icon:'🏢', label:'Empresas propias' },
+          { k:'todos',    icon:'🔍', label:'Todos' },
+        ].map(s => (
+          <button key={s.k}
+            onClick={() => setSegmento(s.k)}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              segmento === s.k
+                ? 'bg-slate-800 text-white shadow'
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}>
+            {s.icon} {s.label}
+          </button>
+        ))}
+      </div>
+
       {/* ═══ BRÚJULA DE COBRO — centro de mando / ruta de cobro ═══ */}
       <div className="bg-gradient-to-br from-slate-800 to-slate-700 rounded-2xl p-4 sm:p-5 shadow-lg">
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
@@ -647,7 +670,11 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                 <div className="flex items-center gap-3 flex-1 min-w-0">
                   <span className="text-3xl flex-shrink-0">{tipoIcon[g.tipo] || '📄'}</span>
                   <div className="text-left min-w-0 flex-1">
-                    <p className="text-base font-bold text-gray-900 leading-tight truncate">{g.nombre_cliente}</p>
+                    <p className="text-base font-bold text-gray-900 leading-tight truncate">
+                      {g.empresa_nombre
+                        ? <><span className="text-violet-600">🏢</span> {g.empresa_nombre}</>
+                        : g.nombre_cliente}
+                    </p>
                     <p className="text-sm font-semibold text-gray-700 mt-0.5">
                       {tipoLabel[g.tipo] || g.tipo}
                       {g.descripcion && <span className="font-normal text-gray-500"> — {g.descripcion.slice(0,30)}{g.descripcion.length > 30 ? '…' : ''}</span>}

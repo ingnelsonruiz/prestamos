@@ -230,6 +230,7 @@ export default function DetallePrestamo() {
   const puedeRefinanciar = saldoPendiente > 0 && !['saldado','refinanciado'].includes(data.estado)
 
   const urlRefinanciar = `/prestamos/nuevo?cliente=${data.cliente_id}&capital=${saldoPendiente}&refinancia=${id}`
+  const urlCongelar    = `/prestamos/nuevo?cliente=${data.cliente_id}&capital=${saldoPendiente}&refinancia=${id}&congelar=1`
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -270,6 +271,12 @@ export default function DetallePrestamo() {
               <Link href={urlRefinanciar}
                 className="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700">
                 🔄 Refinanciar saldo ({fmt(saldoPendiente)})
+              </Link>
+              {/* Congelar: difiere el saldo total en cuotas SIN interés adicional */}
+              <Link href={urlCongelar}
+                title="Difiere la deuda total en cuotas sin cobrar más interés"
+                className="bg-cyan-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-cyan-700">
+                ❄️ Congelar ({fmt(saldoPendiente)})
               </Link>
             </>
           )}

@@ -29,8 +29,9 @@ export async function GET(request) {
       cuotasHoy,
       cuotasSemana,
       empenosVencer,
-      otrosRubros,
       interesesRetornos,
+      otrosRubros,
+      kpisGlobales,
     ] = await Promise.all([
 
       // 1. Capital y conteo por estado — mora detectada por fechas (no por campo estado)
@@ -61,7 +62,7 @@ export async function GET(request) {
             THEN 1 END)::int                                                AS num_refinanciados
         FROM ${S}.cred_productos p
         LEFT JOIN mora_por_producto mpm ON mpm.producto_id = p.id
-        WHERE p.tipo NOT IN ('fiado','adelanto')
+        WHERE p.tipo NOT IN ('fiado','adelanto','congelacion')
       `),
 
       // 2. Intereses cobrados por período
@@ -159,6 +160,7 @@ export async function GET(request) {
         JOIN ${S}.cred_productos p ON p.id = cu.producto_id
         WHERE cu.estado IN ('pendiente','parcial')
           AND p.estado IN ('activo','al_dia','en_mora')
+          AND p.tipo <> 'congelacion'
           AND cu.fecha_vencimiento != '2099-12-31'
       `),
 
@@ -171,6 +173,7 @@ export async function GET(request) {
         JOIN ${S}.cred_productos p ON p.id = cu.producto_id
         WHERE cu.estado IN ('pendiente','parcial')
           AND p.estado IN ('activo','al_dia','en_mora')
+          AND p.tipo <> 'congelacion'
           AND cu.fecha_vencimiento != '2099-12-31'
       `),
 
@@ -228,10 +231,29 @@ export async function GET(request) {
              WHERE cu.producto_id = p.id AND cu.estado != 'pagada')
           ), 0)                                                           AS saldo_pendiente
         FROM ${S}.cred_productos p
-        WHERE p.tipo IN ('fiado','adelanto','venta','empeno')
+        WHERE p.tipo IN ('fiado','adelanto','venta','empeno','congelacion')
           AND p.estado NOT IN ('saldado','decomisado','refinanciado')
         GROUP BY p.tipo
         ORDER BY p.tipo
+      `),
+
+      // 14. KPIs históricos globales (consumidos por /informes).
+      //     Excluye fiado/adelanto (cuentas abiertas) y congelacion (su
+      //     monto_capital incluye interés viejo, no es capital real desembolsado).
+      //     total_invertido / num_creditos: créditos reales no refinanciados
+      //     (el refinanciado original se omite para no duplicar con su sucesor).
+      query(`
+        SELECT
+          COALESCE(SUM(p.monto_capital) FILTER (WHERE p.estado <> 'refinanciado'), 0) AS total_invertido,
+          COUNT(*) FILTER (WHERE p.estado <> 'refinanciado')::int                      AS num_creditos,
+          COALESCE((
+            SELECT SUM(pg.monto)
+            FROM ${S}.cred_pagos pg
+            JOIN ${S}.cred_productos pp ON pp.id = pg.producto_id
+            WHERE pp.tipo NOT IN ('fiado','adelanto','congelacion')
+          ), 0)                                                                        AS total_recuperado
+        FROM ${S}.cred_productos p
+        WHERE p.tipo NOT IN ('fiado','adelanto','congelacion')
       `),
     ])
 
@@ -289,6 +311,13 @@ export async function GET(request) {
       capital: {
         en_calle:              parseFloat(capitalCalle.rows[0].total),
         intereses_proyectados: parseFloat(interesesProyectados.rows[0].total),
+      },
+      // KPIs históricos globales (informes). Congelación excluida del capital.
+      kpis: {
+        total_invertido:  parseFloat(kpisGlobales.rows[0].total_invertido),
+        num_creditos:     kpisGlobales.rows[0].num_creditos,
+        total_recuperado: parseFloat(kpisGlobales.rows[0].total_recuperado),
+        capital_en_calle: parseFloat(capitalCalle.rows[0].total),
       },
       rango: hayRango ? { desde, hasta } : null,
       cuotas_hoy:     cuotasHoy.rows,

@@ -11,6 +11,7 @@ const TIPOS_BASE = [
   { id:'tipo-empeno',   codigo:'empeno',   label:'Empeño',          icono:'🔒', descripcion:'Artículo en garantía con fecha límite rescate.', comportamiento:'empeno',          orden:3 },
   { id:'tipo-fiado',    codigo:'fiado',    label:'Fiado',           icono:'🌿', descripcion:'Cuenta abierta sin interés ni cuotas fijas.',    comportamiento:'cuenta_abierta',  orden:4 },
   { id:'tipo-adelanto', codigo:'adelanto', label:'Adelanto',        icono:'⚡', descripcion:'Anticipo sin interés (emergencias, empleados).', comportamiento:'cuenta_abierta',  orden:5 },
+  { id:'tipo-congelacion', codigo:'congelacion', label:'Congelación', icono:'❄️', descripcion:'Difiere la deuda total (capital + interés vencido) en cuotas sin interés adicional. No cuenta como capital invertido nuevo.', comportamiento:'prestamo_normal', orden:6 },
 ]
 
 async function inicializar() {
