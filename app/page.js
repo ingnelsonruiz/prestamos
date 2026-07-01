@@ -13,9 +13,13 @@ const fmtK = v => {
 }
 
 /* ─── Tarjeta hero con 1 cifra grande ─────────────────────────────────────── */
-function HeroCard({ titulo, valor, sub, bg, textColor = 'text-white', subColor }) {
+function HeroCard({ titulo, valor, sub, bg, textColor = 'text-white', subColor, onDoubleClick }) {
   return (
-    <div className={`${bg} rounded-2xl p-5 shadow-lg`}>
+    <div
+      className={`${bg} rounded-2xl p-5 shadow-lg ${onDoubleClick ? 'cursor-pointer select-none' : ''}`}
+      onDoubleClick={onDoubleClick}
+      title={onDoubleClick ? 'Doble clic para ver el detalle' : undefined}
+    >
       <p className={`text-xs uppercase tracking-wide font-semibold opacity-80 ${textColor}`}>{titulo}</p>
       <p className={`text-3xl font-black mt-1 ${textColor}`}>{valor}</p>
       {sub && <p className={`text-xs mt-1 ${subColor ?? 'opacity-60 ' + textColor}`}>{sub}</p>}
@@ -97,6 +101,22 @@ export default function Dashboard() {
   const [desde, setDesde] = useState('')
   const [hasta, setHasta] = useState('')
   const [rango, setRango] = useState(null)   // { desde, hasta } aplicado
+
+  // Modal detalle intereses proyectados
+  const [modalIntereses, setModalIntereses] = useState(false)
+  const [detalleIntereses, setDetalleIntereses] = useState(null)
+  const [cargandoDetalle, setCargandoDetalle] = useState(false)
+
+  const abrirDetalleIntereses = async () => {
+    setModalIntereses(true)
+    setCargandoDetalle(true)
+    setDetalleIntereses(null)
+    const qs = rango ? `?desde=${rango.desde}&hasta=${rango.hasta}` : ''
+    const res = await fetch(`/api/dashboard/intereses-detalle${qs}`)
+    const json = await res.json()
+    setDetalleIntereses(json)
+    setCargandoDetalle(false)
+  }
 
   useEffect(() => {
     setFechaHoy(
@@ -188,6 +208,7 @@ export default function Dashboard() {
             ? `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}`
             : 'Por cobrar en cuotas pendientes (todos los períodos)'}
           bg="bg-gradient-to-br from-emerald-600 to-emerald-500"
+          onDoubleClick={abrirDetalleIntereses}
         />
         <HeroCard
           titulo="💵 Intereses recogidos"
@@ -401,6 +422,73 @@ export default function Dashboard() {
           }
         </div>
       </div>
+
+      {/* Modal detalle intereses proyectados */}
+      {modalIntereses && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setModalIntereses(false) }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b bg-emerald-600 rounded-t-2xl">
+              <div>
+                <h3 className="text-white font-bold text-lg">Detalle de intereses proyectados</h3>
+                <p className="text-emerald-100 text-xs mt-0.5">
+                  {rango ? `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}` : 'Todos los periodos pendientes'}
+                </p>
+              </div>
+              <button onClick={() => setModalIntereses(false)}
+                className="text-white/80 hover:text-white text-2xl leading-none font-bold px-2">x</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {cargandoDetalle && <div className="text-center text-gray-400 py-12">Cargando...</div>}
+              {!cargandoDetalle && detalleIntereses && detalleIntereses.length === 0 && (
+                <div className="text-center text-gray-400 py-12">Sin cuotas pendientes en el periodo</div>
+              )}
+              {!cargandoDetalle && detalleIntereses && detalleIntereses.length > 0 && (
+                <table className="w-full text-sm border-separate border-spacing-y-1">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wide text-gray-400">
+                      <th className="text-left px-3 py-2">Cliente</th>
+                      <th className="text-left px-3 py-2">Credito</th>
+                      <th className="text-center px-3 py-2">Cuotas</th>
+                      <th className="text-left px-3 py-2">Prox. vence</th>
+                      <th className="text-right px-3 py-2 text-emerald-700">Interes proyect.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalleIntereses.map(d => (
+                      <tr key={d.producto_id} className="bg-gray-50 hover:bg-emerald-50 rounded-lg transition-colors">
+                        <td className="px-3 py-2 rounded-l-lg">
+                          <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-emerald-700 hover:underline block">{d.nombre_cliente}</a>
+                          <span className="text-[11px] text-gray-400">{d.documento}</span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <a href={'/prestamos/' + d.producto_id} className="text-blue-600 hover:underline font-mono text-xs">{d.referencia || d.producto_id.slice(0,8)}</a>
+                          <span className="block text-[11px] text-gray-400 capitalize">{d.tipo_producto} - {fmt(d.monto_capital)}</span>
+                        </td>
+                        <td className="px-3 py-2 text-center text-gray-600 font-semibold">{d.cuotas_pendientes}</td>
+                        <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
+                          {d.proxima_fecha ? new Date(d.proxima_fecha + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '-'}
+                        </td>
+                        <td className="px-3 py-2 text-right rounded-r-lg font-bold text-emerald-700">{fmt(d.interes_proyectado)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan="4" className="px-3 pt-3 text-sm font-semibold text-gray-600">
+                        Total ({detalleIntereses.length} credito{detalleIntereses.length !== 1 ? 's' : ''})
+                      </td>
+                      <td className="px-3 pt-3 text-right text-base font-black text-emerald-700">
+                        {fmt(detalleIntereses.reduce((s, d) => s + d.interes_proyectado, 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Accesos rápidos */}
       <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-3 pt-2">
