@@ -250,19 +250,22 @@ export default function RecibosPage() {
                   {r.telefono && (() => {
                     const saldoCap = r.estado_producto === 'saldado' ? 0 : Math.max(parseFloat(r.monto_capital) - parseFloat(r.capital_pagado), 0)
                     const esCuenta = r.fecha_vencimiento === '2099-12-31'
+                    const e = (cp) => String.fromCodePoint(cp)
                     const msg = [
-                      '🧾 *Recibo ' + r.numero_recibo + '*',
-                      '📅 Fecha: ' + fmtFecha(r.fecha_pago),
+                      e(0x1F9FE) + ' *Recibo ' + r.numero_recibo + '*',
+                      e(0x1F4C5) + ' Fecha: ' + fmtFecha(r.fecha_pago),
                       '',
-                      '👤 Cliente: *' + r.nombre_cliente + '*',
+                      e(0x1F464) + ' Cliente: *' + r.nombre_cliente + '*',
                       'CC/NIT: ' + r.documento,
                       '',
-                      '✅ Valor pagado: *' + fmt(r.monto) + '*',
+                      e(0x2705) + ' Valor pagado: *' + fmt(r.monto) + '*',
                       '   • Abono capital: ' + fmt(r.abono_capital),
                       '   • Abono interés: ' + fmt(r.abono_interes),
                       '',
-                      !esCuenta ? '💰 Capital prestado: ' + fmt(r.monto_capital) : null,
-                      !esCuenta ? (r.estado_producto === 'saldado' ? '🟢 *Crédito totalmente saldado*' : '🔸 Saldo de capital: *' + fmt(saldoCap) + '*') : null,
+                      !esCuenta ? e(0x1F4B0) + ' Capital prestado: ' + fmt(r.monto_capital) : null,
+                      !esCuenta ? (r.estado_producto === 'saldado'
+                        ? e(0x1F7E2) + ' *Crédito totalmente saldado*'
+                        : e(0x1F538) + ' Saldo de capital: *' + fmt(saldoCap) + '*') : null,
                       '',
                       '_Inversiones Tata Liñán_',
                     ].filter(x => x !== null).join('\n')
