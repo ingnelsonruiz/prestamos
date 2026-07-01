@@ -138,6 +138,129 @@ function BotonReset() {
   )
 }
 
+// ── Limpiar datos de un cliente específico ────────────────────────────────────
+function BotonResetCliente() {
+  const [busqueda, setBusqueda]   = useState('')
+  const [buscando, setBuscando]   = useState(false)
+  const [cliente, setCliente]     = useState(null)
+  const [errorBusq, setErrorBusq] = useState('')
+  const [fase, setFase]           = useState(0)   // 0=buscar 1=confirmar 2=ejecutando
+  const [resultado, setResultado] = useState(null)
+  const [errorEjec, setErrorEjec] = useState('')
+
+  const buscar = async () => {
+    if (!busqueda.trim()) return
+    setBuscando(true); setErrorBusq(''); setCliente(null); setResultado(null)
+    try {
+      const res  = await fetch(`/api/clientes?q=${encodeURIComponent(busqueda.trim())}`)
+      const data = await res.json()
+      const lista = Array.isArray(data) ? data : (data.clientes ?? [])
+      if (lista.length === 0) {
+        setErrorBusq('No se encontró ningún cliente con ese nombre o documento.')
+      } else if (lista.length > 1) {
+        setErrorBusq(`Se encontraron ${lista.length} clientes. Usa el documento exacto para ser más preciso.`)
+      } else {
+        setCliente({ id: lista[0].id, nombre: lista[0].nombre, documento: lista[0].documento })
+        setFase(1)
+      }
+    } catch { setErrorBusq('Error de conexión al buscar el cliente.') }
+    finally  { setBuscando(false) }
+  }
+
+  const ejecutar = async () => {
+    setFase(2); setErrorEjec('')
+    try {
+      const res  = await fetch('/api/migracion/reset-cliente', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clienteId: cliente.id }),
+      })
+      const data = await res.json()
+      if (data.ok) { setResultado(data); setFase(0); setBusqueda(''); setCliente(null) }
+      else { setErrorEjec(data.error || 'Error desconocido.'); setFase(1) }
+    } catch { setErrorEjec('Error de conexión.'); setFase(1) }
+  }
+
+  const cancelar = () => { setFase(0); setCliente(null); setBusqueda(''); setErrorBusq(''); setErrorEjec('') }
+
+  return (
+    <div className="bg-orange-50 border-2 border-orange-200 rounded-2xl p-5 space-y-3">
+      <div className="flex items-center gap-3">
+        <span className="text-3xl">🎯</span>
+        <div>
+          <p className="font-bold text-orange-700">Limpiar cliente específico</p>
+          <p className="text-xs text-orange-500">Borra solo los préstamos, cuotas y pagos de un cliente. <strong>El cliente y los demás no se tocan.</strong></p>
+        </div>
+      </div>
+
+      {/* Sin movimientos */}
+      {resultado?.sinMovimientos && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700 space-y-1">
+          <p className="font-semibold">ℹ️ <strong>{resultado.cliente.nombre}</strong> no tiene préstamos ni movimientos registrados.</p>
+          <p className="text-xs text-blue-500">No había nada que borrar.</p>
+          <button onClick={() => setResultado(null)} className="text-blue-300 hover:text-blue-500 text-xs">Cerrar ✕</button>
+        </div>
+      )}
+
+      {/* Eliminado correctamente */}
+      {resultado && !resultado.sinMovimientos && (
+        <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 space-y-1">
+          <p className="font-semibold">✅ Datos de <strong>{resultado.cliente.nombre}</strong> eliminados correctamente.</p>
+          <p className="text-xs text-green-600">
+            {resultado.eliminado.prods} préstamo(s) · {resultado.eliminado.cuotas} cuota(s) · {resultado.eliminado.pagos} pago(s) · {resultado.eliminado.movimientos} mov. de caja
+          </p>
+          <button onClick={() => setResultado(null)} className="text-green-400 hover:text-green-600 text-xs">Cerrar ✕</button>
+        </div>
+      )}
+
+      {/* Fase 0: buscador */}
+      {fase === 0 && (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              type="text" value={busqueda}
+              onChange={e => { setBusqueda(e.target.value); setErrorBusq('') }}
+              onKeyDown={e => e.key === 'Enter' && buscar()}
+              placeholder="Nombre o número de documento..."
+              className="flex-1 border-2 border-orange-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-orange-400"
+            />
+            <button onClick={buscar} disabled={buscando || !busqueda.trim()}
+              className="bg-orange-600 hover:bg-orange-700 disabled:opacity-40 text-white rounded-xl px-4 py-2 text-sm font-semibold">
+              {buscando ? '⏳' : '🔍 Buscar'}
+            </button>
+          </div>
+          {errorBusq && <p className="text-xs text-red-600 font-medium">{errorBusq}</p>}
+        </div>
+      )}
+
+      {/* Fase 1: confirmar */}
+      {fase === 1 && cliente && (
+        <div className="space-y-3">
+          <div className="bg-white border-2 border-orange-300 rounded-xl px-4 py-3">
+            <p className="text-sm font-bold text-gray-800">{cliente.nombre}</p>
+            <p className="text-xs text-gray-500">CC / Doc: {cliente.documento}</p>
+          </div>
+          <div className="bg-orange-100 border border-orange-300 rounded-xl p-3 text-sm text-orange-800 font-semibold text-center">
+            ⚠️ Se borrarán TODOS los préstamos, cuotas y pagos de este cliente.<br/>
+            <span className="font-normal text-xs">Esta acción NO se puede deshacer.</span>
+          </div>
+          {errorEjec && <p className="text-xs text-red-600 font-medium text-center">{errorEjec}</p>}
+          <div className="flex gap-2">
+            <button onClick={cancelar} className="flex-1 border rounded-xl py-2 text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
+            <button onClick={ejecutar} className="flex-1 bg-orange-700 text-white rounded-xl py-2 text-sm font-bold hover:bg-orange-800">
+              🗑️ Confirmar limpieza
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Fase 2: ejecutando */}
+      {fase === 2 && (
+        <div className="text-center py-4 text-orange-700 font-semibold text-sm">⏳ Eliminando datos del cliente...</div>
+      )}
+    </div>
+  )
+}
+
 const fmt = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v || 0)
 
 // ── Definición de plantillas ──────────────────────────────────────────────────
@@ -576,6 +699,7 @@ export default function MigracionPage() {
           <p className="text-xs text-gray-400 uppercase tracking-wide font-semibold">⚙️ Zona de desarrollo</p>
           <ToggleModoPrueba />
           <BotonReset />
+          <BotonResetCliente />
         </div>
       )}
 
