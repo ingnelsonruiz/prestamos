@@ -164,18 +164,31 @@ export async function GET(request) {
           AND cu.fecha_vencimiento != '2099-12-31'
       `),
 
-      // 7. Intereses proyectados: suma de abono_interes pendiente en productos activos
-      query(`
-        SELECT COALESCE(SUM(
-          cu.abono_interes * (1 - LEAST(cu.monto_pagado, cu.monto_cuota) / NULLIF(cu.monto_cuota, 0))
-        ), 0) AS total
-        FROM ${S}.cred_cuotas cu
-        JOIN ${S}.cred_productos p ON p.id = cu.producto_id
-        WHERE cu.estado IN ('pendiente','parcial')
-          AND p.estado IN ('activo','al_dia','en_mora')
-          AND p.tipo <> 'congelacion'
-          AND cu.fecha_vencimiento != '2099-12-31'
-      `),
+      // 7. Intereses proyectados — si hay rango filtra por fecha_vencimiento de la cuota
+      hayRango
+        ? query(`
+            SELECT COALESCE(SUM(
+              cu.abono_interes * (1 - LEAST(cu.monto_pagado, cu.monto_cuota) / NULLIF(cu.monto_cuota, 0))
+            ), 0) AS total
+            FROM ${S}.cred_cuotas cu
+            JOIN ${S}.cred_productos p ON p.id = cu.producto_id
+            WHERE cu.estado IN ('pendiente','parcial')
+              AND p.estado IN ('activo','al_dia','en_mora')
+              AND p.tipo <> 'congelacion'
+              AND cu.fecha_vencimiento != '2099-12-31'
+              AND cu.fecha_vencimiento BETWEEN $1 AND $2
+          `, [desde, hasta])
+        : query(`
+            SELECT COALESCE(SUM(
+              cu.abono_interes * (1 - LEAST(cu.monto_pagado, cu.monto_cuota) / NULLIF(cu.monto_cuota, 0))
+            ), 0) AS total
+            FROM ${S}.cred_cuotas cu
+            JOIN ${S}.cred_productos p ON p.id = cu.producto_id
+            WHERE cu.estado IN ('pendiente','parcial')
+              AND p.estado IN ('activo','al_dia','en_mora')
+              AND p.tipo <> 'congelacion'
+              AND cu.fecha_vencimiento != '2099-12-31'
+          `),
 
       // 8. Cuotas que vencen HOY (pendientes/parciales)
       query(`

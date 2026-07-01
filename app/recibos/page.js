@@ -194,6 +194,23 @@ export default function RecibosPage() {
                   </div>
                 </div>
 
+                {/* Saldo pendiente */}
+                {r.estado_producto !== 'saldado' && parseFloat(r.saldo_pendiente) > 0 ? (
+                  <div className="mx-6 mb-4 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-600">Saldo pendiente</p>
+                      <p className="text-xs text-amber-500 mt-0.5">
+                        {r.cuotas_pendientes} cuota{r.cuotas_pendientes !== '1' ? 's' : ''} por cancelar
+                      </p>
+                    </div>
+                    <p className="text-xl font-black text-amber-700">{fmt(r.saldo_pendiente)}</p>
+                  </div>
+                ) : r.estado_producto === 'saldado' ? (
+                  <div className="mx-6 mb-4 rounded-xl bg-green-50 border border-green-200 px-4 py-2 text-center">
+                    <p className="text-sm font-bold text-green-700">✅ Crédito saldado — sin deuda pendiente</p>
+                  </div>
+                ) : null}
+
                 {/* Notas */}
                 {r.notas && (
                   <div className="px-6 pb-4">

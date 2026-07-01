@@ -40,7 +40,23 @@ export async function GET(request) {
         p.tasa_interes,
         p.periodo_tasa,
         p.frecuencia_cobro,
-        p.metodo_calculo
+        p.metodo_calculo,
+        p.estado AS estado_producto,
+        -- Saldo pendiente actual: cuotas no saldadas del producto
+        COALESCE((
+          SELECT SUM(GREATEST(cu2.monto_cuota - cu2.monto_pagado, 0))
+          FROM ${S}.cred_cuotas cu2
+          WHERE cu2.producto_id = p.id
+            AND cu2.estado IN ('pendiente','parcial')
+            AND cu2.fecha_vencimiento != '2099-12-31'
+        ), 0) AS saldo_pendiente,
+        COALESCE((
+          SELECT COUNT(*)
+          FROM ${S}.cred_cuotas cu3
+          WHERE cu3.producto_id = p.id
+            AND cu3.estado IN ('pendiente','parcial')
+            AND cu3.fecha_vencimiento != '2099-12-31'
+        ), 0) AS cuotas_pendientes
       FROM ${S}.cred_pagos pg
       JOIN ${S}.cred_cuotas   cu ON cu.id = pg.cuota_id
       JOIN ${S}.cred_clientes c  ON c.id  = pg.cliente_id

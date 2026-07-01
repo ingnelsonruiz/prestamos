@@ -184,7 +184,9 @@ export default function Dashboard() {
         <HeroCard
           titulo="📈 Intereses proyectados"
           valor={fmt(capital.intereses_proyectados)}
-          sub="Por cobrar en cuotas pendientes"
+          sub={rango
+            ? `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}`
+            : 'Por cobrar en cuotas pendientes (todos los períodos)'}
           bg="bg-gradient-to-br from-emerald-600 to-emerald-500"
         />
         <HeroCard
