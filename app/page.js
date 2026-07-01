@@ -107,6 +107,21 @@ export default function Dashboard() {
   const [detalleIntereses, setDetalleIntereses] = useState(null)
   const [cargandoDetalle, setCargandoDetalle] = useState(false)
 
+  const [modalRecogidos, setModalRecogidos] = useState(false)
+  const [detalleRecogidos, setDetalleRecogidos] = useState(null)
+  const [cargandoRecogidos, setCargandoRecogidos] = useState(false)
+
+  const abrirDetalleRecogidos = async () => {
+    setModalRecogidos(true)
+    setCargandoRecogidos(true)
+    setDetalleRecogidos(null)
+    const qs = rango ? `?desde=${rango.desde}&hasta=${rango.hasta}` : ''
+    const res = await fetch(`/api/dashboard/intereses-recogidos-detalle${qs}`)
+    const json = await res.json()
+    setDetalleRecogidos(json)
+    setCargandoRecogidos(false)
+  }
+
   const abrirDetalleIntereses = async () => {
     setModalIntereses(true)
     setCargandoDetalle(true)
@@ -217,6 +232,7 @@ export default function Dashboard() {
             ? `Recogido del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}`
             : 'Ganancia por intereses ya cobrada'}
           bg="bg-gradient-to-br from-amber-500 to-orange-500"
+          onDoubleClick={abrirDetalleRecogidos}
         />
       </div>
 
@@ -422,6 +438,73 @@ export default function Dashboard() {
           }
         </div>
       </div>
+
+      {/* Modal detalle intereses recogidos */}
+      {modalRecogidos && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setModalRecogidos(false) }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b bg-amber-500 rounded-t-2xl">
+              <div>
+                <h3 className="text-white font-bold text-lg">Detalle de intereses recogidos</h3>
+                <p className="text-amber-100 text-xs mt-0.5">
+                  {rango ? `Pagos del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}` : 'Todos los pagos historicos'}
+                </p>
+              </div>
+              <button onClick={() => setModalRecogidos(false)}
+                className="text-white/80 hover:text-white text-2xl leading-none font-bold px-2">x</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {cargandoRecogidos && <div className="text-center text-gray-400 py-12">Cargando...</div>}
+              {!cargandoRecogidos && detalleRecogidos && detalleRecogidos.length === 0 && (
+                <div className="text-center text-gray-400 py-12">Sin pagos en el periodo</div>
+              )}
+              {!cargandoRecogidos && detalleRecogidos && detalleRecogidos.length > 0 && (
+                <table className="w-full text-sm border-separate border-spacing-y-1">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wide text-gray-400">
+                      <th className="text-left px-3 py-2">Cliente</th>
+                      <th className="text-left px-3 py-2">Credito</th>
+                      <th className="text-center px-3 py-2">Pagos</th>
+                      <th className="text-left px-3 py-2">Ultimo pago</th>
+                      <th className="text-right px-3 py-2 text-amber-600">Interes cobrado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalleRecogidos.map(d => (
+                      <tr key={d.producto_id} className="bg-gray-50 hover:bg-amber-50 rounded-lg transition-colors">
+                        <td className="px-3 py-2 rounded-l-lg">
+                          <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-amber-700 hover:underline block">{d.nombre_cliente}</a>
+                          <span className="text-[11px] text-gray-400">{d.documento}</span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <a href={'/prestamos/' + d.producto_id} className="text-blue-600 hover:underline font-mono text-xs">{d.referencia || d.producto_id.slice(0,8)}</a>
+                          <span className="block text-[11px] text-gray-400 capitalize">{d.tipo_producto} - {fmt(d.monto_capital)}</span>
+                        </td>
+                        <td className="px-3 py-2 text-center text-gray-600 font-semibold">{d.num_pagos}</td>
+                        <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
+                          {d.ultimo_pago ? new Date(d.ultimo_pago + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '-'}
+                        </td>
+                        <td className="px-3 py-2 text-right rounded-r-lg font-bold text-amber-600">{fmt(d.interes_cobrado)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan="4" className="px-3 pt-3 text-sm font-semibold text-gray-600">
+                        Total ({detalleRecogidos.length} credito{detalleRecogidos.length !== 1 ? 's' : ''})
+                      </td>
+                      <td className="px-3 pt-3 text-right text-base font-black text-amber-600">
+                        {fmt(detalleRecogidos.reduce((s, d) => s + d.interes_cobrado, 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal detalle intereses proyectados */}
       {modalIntereses && (
