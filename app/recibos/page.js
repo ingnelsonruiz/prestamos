@@ -219,8 +219,25 @@ export default function RecibosPage() {
                   </div>
                 )}
 
+                {/* Capital prestado y saldo de capital */}
+                {r.fecha_vencimiento !== '2099-12-31' && (
+                  <div className="mx-6 mb-4 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 flex justify-between gap-4">
+                    <div className="text-center flex-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Capital prestado</p>
+                      <p className="text-lg font-black text-slate-700 mt-0.5">{fmt(r.monto_capital)}</p>
+                    </div>
+                    <div className="w-px bg-slate-200" />
+                    <div className="text-center flex-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Saldo de capital</p>
+                      <p className={`text-lg font-black mt-0.5 ${r.estado_producto === 'saldado' ? 'text-green-600' : 'text-amber-600'}`}>
+                        {r.estado_producto === 'saldado' ? fmt(0) : fmt(Math.max(parseFloat(r.monto_capital) - parseFloat(r.capital_pagado), 0))}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Acciones */}
-                <div className="px-6 pb-4 flex gap-2">
+                <div className="px-6 pb-4 flex flex-wrap gap-2">
                   <button
                     onClick={() => imprimir(r)}
                     className="flex items-center gap-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors">
@@ -230,6 +247,36 @@ export default function RecibosPage() {
                     className="flex items-center gap-2 text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-medium transition-colors">
                     👤 Ver cliente
                   </a>
+                  {r.telefono && (() => {
+                    const saldoCap = r.estado_producto === 'saldado' ? 0 : Math.max(parseFloat(r.monto_capital) - parseFloat(r.capital_pagado), 0)
+                    const esCuenta = r.fecha_vencimiento === '2099-12-31'
+                    const msg = [
+                      '📋 *Recibo ' + r.numero_recibo + '*',
+                      '📅 Fecha: ' + fmtFecha(r.fecha_pago),
+                      '',
+                      '👤 *' + r.nombre_cliente + '*',
+                      'CC/NIT: ' + r.documento,
+                      '',
+                      '\u2705 Valor pagado: *' + fmt(r.monto) + '*',
+                      '   \u2022 Abono capital: ' + fmt(r.abono_capital),
+                      '   \u2022 Abono inter\u00e9s: ' + fmt(r.abono_interes),
+                      '',
+                      !esCuenta ? '💰 Capital prestado: ' + fmt(r.monto_capital) : null,
+                      !esCuenta ? (r.estado_producto === 'saldado' ? '\U0001F7E2 Saldo capital: *$0* \u2014 \u00a1Cr\u00e9dito saldado!' : '\U0001F538 Saldo capital restante: *' + fmt(saldoCap) + '*') : null,
+                      r.notas ? '📝 Nota: ' + r.notas : null,
+                      '',
+                      '_Inversiones Tata Li\u00f1\u00e1n_',
+                    ].filter(x => x !== null).join('\n')
+                    const tel = r.telefono.replace(/\D/g, '')
+                    return (
+                      <a
+                        href={'https://wa.me/57' + tel + '?text=' + encodeURIComponent(msg)}
+                        target="_blank" rel="noopener noreferrer"
+                        className="flex items-center gap-2 text-sm bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 px-4 py-2 rounded-lg font-medium transition-colors">
+                        💬 Enviar por WhatsApp
+                      </a>
+                    )
+                  })()}
                 </div>
               </div>
             ))}
