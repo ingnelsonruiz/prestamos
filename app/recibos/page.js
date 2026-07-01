@@ -194,22 +194,22 @@ export default function RecibosPage() {
                   </div>
                 </div>
 
-                {/* Saldo pendiente */}
-                {r.estado_producto !== 'saldado' && parseFloat(r.saldo_pendiente) > 0 ? (
-                  <div className="mx-6 mb-4 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-600">Saldo pendiente</p>
-                      <p className="text-xs text-amber-500 mt-0.5">
-                        {r.cuotas_pendientes} cuota{r.cuotas_pendientes !== '1' ? 's' : ''} por cancelar
+                {/* Capital prestado y saldo de capital */}
+                {r.fecha_vencimiento !== '2099-12-31' && (
+                  <div className="mx-6 mb-4 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 flex justify-between gap-4">
+                    <div className="text-center flex-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Capital prestado</p>
+                      <p className="text-lg font-black text-slate-700 mt-0.5">{fmt(r.monto_capital)}</p>
+                    </div>
+                    <div className="w-px bg-slate-200" />
+                    <div className="text-center flex-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Saldo de capital</p>
+                      <p className={`text-lg font-black mt-0.5 ${r.estado_producto === 'saldado' ? 'text-green-600' : 'text-amber-600'}`}>
+                        {r.estado_producto === 'saldado' ? fmt(0) : fmt(Math.max(parseFloat(r.monto_capital) - parseFloat(r.capital_pagado), 0))}
                       </p>
                     </div>
-                    <p className="text-xl font-black text-amber-700">{fmt(r.saldo_pendiente)}</p>
                   </div>
-                ) : r.estado_producto === 'saldado' ? (
-                  <div className="mx-6 mb-4 rounded-xl bg-green-50 border border-green-200 px-4 py-2 text-center">
-                    <p className="text-sm font-bold text-green-700">✅ Crédito saldado — sin deuda pendiente</p>
-                  </div>
-                ) : null}
+                )}
 
                 {/* Notas */}
                 {r.notas && (

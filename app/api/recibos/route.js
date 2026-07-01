@@ -42,21 +42,12 @@ export async function GET(request) {
         p.frecuencia_cobro,
         p.metodo_calculo,
         p.estado AS estado_producto,
-        -- Saldo pendiente actual: cuotas no saldadas del producto
+        -- Capital ya pagado: suma del abono a capital en todas las cuotas del producto
         COALESCE((
-          SELECT SUM(GREATEST(cu2.monto_cuota - cu2.monto_pagado, 0))
+          SELECT SUM(GREATEST(cu2.monto_pagado - cu2.abono_interes, 0))
           FROM ${S}.cred_cuotas cu2
           WHERE cu2.producto_id = p.id
-            AND cu2.estado IN ('pendiente','parcial')
-            AND cu2.fecha_vencimiento != '2099-12-31'
-        ), 0) AS saldo_pendiente,
-        COALESCE((
-          SELECT COUNT(*)
-          FROM ${S}.cred_cuotas cu3
-          WHERE cu3.producto_id = p.id
-            AND cu3.estado IN ('pendiente','parcial')
-            AND cu3.fecha_vencimiento != '2099-12-31'
-        ), 0) AS cuotas_pendientes
+        ), 0) AS capital_pagado
       FROM ${S}.cred_pagos pg
       JOIN ${S}.cred_cuotas   cu ON cu.id = pg.cuota_id
       JOIN ${S}.cred_clientes c  ON c.id  = pg.cliente_id
