@@ -3,6 +3,19 @@ import { query } from '@/lib/db'
 
 const S = 'administrativo'
 
+// `pg` devuelve las columnas DATE como objetos Date; al pasar por
+// NextResponse.json() se serializan como ISO completo con hora ("...T00:00:00.000Z").
+// El frontend (app/page.js) hace `new Date(fecha + 'T12:00:00')` esperando un
+// simple "YYYY-MM-DD" — si ya trae hora, la concatenación produce "Invalid Date".
+// Se normaliza aquí a "YYYY-MM-DD" en UTC (sin desfase, porque `pg` construye la
+// fecha a medianoche UTC) antes de responder.
+const fechaStr = (v) => {
+  if (v instanceof Date) {
+    return v.getUTCFullYear() + '-' + String(v.getUTCMonth() + 1).padStart(2, '0') + '-' + String(v.getUTCDate()).padStart(2, '0')
+  }
+  return v
+}
+
 export async function GET(request) {
   try {
     const hoy = new Date().toISOString().split('T')[0]
@@ -333,9 +346,9 @@ export async function GET(request) {
         capital_en_calle: parseFloat(capitalCalle.rows[0].total),
       },
       rango: hayRango ? { desde, hasta } : null,
-      cuotas_hoy:     cuotasHoy.rows,
-      cuotas_semana:  cuotasSemana.rows,
-      empenos_vencer: empenosVencer.rows,
+      cuotas_hoy:     cuotasHoy.rows.map(r => ({ ...r, fecha_vencimiento: fechaStr(r.fecha_vencimiento) })),
+      cuotas_semana:  cuotasSemana.rows.map(r => ({ ...r, fecha_vencimiento: fechaStr(r.fecha_vencimiento) })),
+      empenos_vencer: empenosVencer.rows.map(r => ({ ...r, fecha_limite_rescate: fechaStr(r.fecha_limite_rescate) })),
       otros_rubros:   otrosRubros.rows.map(r => ({
         tipo:            r.tipo,
         cantidad:        r.cantidad,

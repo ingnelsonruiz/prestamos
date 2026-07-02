@@ -543,6 +543,7 @@ Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para 
 - KPIs históricos: Total invertido, Total recuperado, Capital en la calle.
 - KPIs operativos: Intereses ganados, Clientes en mora, Recaudo del día, Cartera vencida +30d.
 - Listas: Cuotas hoy, Cuotas semana, Empeños próximos a vencer.
+- **Bug corregido (2026-07-02) — "Invalid Date" en "Próximos 7 días"**: `GET /api/dashboard` devolvía `cred_cuotas.fecha_vencimiento` / `cred_productos.fecha_limite_rescate` tal cual las entrega `pg` (objeto `Date`), que al pasar por `NextResponse.json()` se serializa como ISO completo (`...T00:00:00.000Z`). El frontend (`app/page.js`) hace `new Date(fecha + 'T12:00:00')` esperando un `"YYYY-MM-DD"` simple; al concatenar sobre un ISO ya completo, el resultado es `"Invalid Date"`. Se corrigió normalizando esas fechas a `"YYYY-MM-DD"` (helper `fechaStr`, en UTC para no desfasar) antes de responder, en `cuotas_hoy`, `cuotas_semana` y `empenos_vencer`. **Mismo patrón a vigilar** en cualquier endpoint nuevo que devuelva columnas `DATE`/`TIMESTAMP` crudas de `pg` para que el frontend las concatene con hora fija.
 
 ### Clientes (`/clientes`)
 - Hero card blanco con barra de acento de color (rojo=mora, azul=activo, verde=sin deuda).
