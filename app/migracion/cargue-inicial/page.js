@@ -113,6 +113,12 @@ export default function CargueInicialPage() {
   const tipoSel = tipos.find(t => t.codigo === form.tipo)
   const esEmpeno = tipoSel?.comportamiento === 'empeno'
   const requiereDesemb = form.metodo_desembolso !== 'efectivo'
+  // Congelación nunca cobra interés — misma regla que en /prestamos/nuevo (2026-07-02).
+  const esCongelacion = form.tipo === 'congelacion'
+
+  useEffect(() => {
+    if (esCongelacion && form.tasa_interes !== '0') set('tasa_interes', '0')
+  }, [esCongelacion])
 
   // ── Paso 1 → 2: generar cronograma teórico ────────────────────────────────
   function generarTabla() {
@@ -203,10 +209,10 @@ export default function CargueInicialPage() {
           producto: {
             cliente_id: form.cliente_id, tipo: form.tipo,
             monto_capital: parseFloat(form.monto_capital),
-            tasa_interes: parseFloat(form.tasa_interes || 0),
+            tasa_interes: esCongelacion ? 0 : parseFloat(form.tasa_interes || 0),
             periodo_tasa: form.periodo_tasa, frecuencia_cobro: form.frecuencia_cobro,
             num_cuotas: parseInt(form.num_cuotas), metodo_calculo: form.metodo_calculo,
-            con_interes: parseFloat(form.tasa_interes || 0) > 0,
+            con_interes: esCongelacion ? false : parseFloat(form.tasa_interes || 0) > 0,
             fecha_desembolso: form.fecha_desembolso,
             fecha_primer_pago: form.fecha_primer_pago || form.fecha_desembolso,
             fecha_corte: form.fecha_corte,
@@ -313,8 +319,14 @@ export default function CargueInicialPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium text-gray-700">Tasa interés (%)</label>
-                <input type="number" step="0.01" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  value={form.tasa_interes} onChange={e => set('tasa_interes', e.target.value)} />
+                {esCongelacion ? (
+                  <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
+                    0% — sin interés ❄️
+                  </div>
+                ) : (
+                  <input type="number" step="0.01" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    value={form.tasa_interes} onChange={e => set('tasa_interes', e.target.value)} />
+                )}
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Período tasa</label>

@@ -76,13 +76,18 @@ export async function POST(request) {
 
     const capital = parseFloat(monto_capital)
 
+    // Congelación NUNCA cobra interés — misma regla que en POST /api/productos
+    // (defensa en profundidad, sin importar lo que envíe el cliente).
+    const tasaSegura       = tipo === 'congelacion' ? 0 : (con_interes === false ? 0 : parseFloat(tasa_interes || 0))
+    const conInteresSeguro = tipo === 'congelacion' ? false : (con_interes !== false)
+
     // ── 1. Cronograma teórico (AUTORITATIVO en el servidor) ─────────────────
     const productoId = uuidv4()
     const cuotasGen = generarCuotas({
       id:                productoId,
       cliente_id,
       monto_capital:     capital,
-      tasa_interes:      con_interes === false ? 0 : parseFloat(tasa_interes || 0),
+      tasa_interes:      tasaSegura,
       periodo_tasa:      periodo_tasa || 'mensual',
       frecuencia_cobro:  frecuencia_cobro || 'mensual',
       num_cuotas:        nCuotas,
@@ -209,9 +214,9 @@ export async function POST(request) {
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
         [
           productoId, referencia, cliente_id, tipo, capital,
-          con_interes === false ? 0 : parseFloat(tasa_interes || 0),
+          tasaSegura,
           periodo_tasa || 'mensual', frecuencia_cobro || 'mensual', nCuotas,
-          fPrimerPago, con_interes !== false, metodo,
+          fPrimerPago, conInteresSeguro, metodo,
           0, descripcion_bien || null, valor_comercial_bien || null, fecha_limite_rescate || null,
           estadoFinal, notas || null, medioDesemb, entidadDesemb, refDesemb,
           tsLocal(fDesembolso),

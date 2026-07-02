@@ -197,6 +197,10 @@ function NuevoPrestamoContenido() {
   const comportamiento = tipoActual?.comportamiento ?? 'prestamo_normal'
   const esCuentaAbierta = comportamiento === 'cuenta_abierta'
   const esEmpeno        = comportamiento === 'empeno'
+  // Congelación NUNCA cobra interés — sin importar si se llegó por el botón ❄️
+  // (?congelar=1) o si el usuario eligió "Congelación" directamente en el
+  // desplegable de Tipo. Antes solo se forzaba tasa=0 en el primer caso.
+  const esCongelacion   = esCongelar || form.tipo === 'congelacion'
 
   useEffect(() => {
     fetch('/api/clientes').then(r=>r.json()).then(d => setClientes(Array.isArray(d) ? d : []))
@@ -209,6 +213,15 @@ function NuevoPrestamoContenido() {
     const d = new Date(); d.setMonth(d.getMonth()+1)
     setForm(f => ({...f, fecha_primer_pago: d.toISOString().split('T')[0]}))
   }, [])
+
+  // Si el tipo elegido (por el usuario o por la URL) es "congelación", bloquear
+  // la tasa en 0 de inmediato — cubre el caso de elegirlo manualmente en el
+  // desplegable de Tipo, que antes dejaba la tasa (ej. 10%) sin tocar.
+  useEffect(() => {
+    if (esCongelacion && (form.tasa_interes !== '0' || form.con_interes !== false)) {
+      setForm(f => ({ ...f, tasa_interes: '0', con_interes: false }))
+    }
+  }, [esCongelacion])
 
   // Ajustar fecha según tipo: cuenta abierta → hoy, préstamo normal → hoy+1 mes
   useEffect(() => {
@@ -267,6 +280,8 @@ function NuevoPrestamoContenido() {
         empresa_id:            esInterno ? (form.empresa_id||null) : null,
         // Préstamo interno: sin interés, 1 cuota abierta — se liquida al recoger
         ...(esInterno ? { tasa_interes: 0, con_interes: false } : {}),
+        // Congelación: nunca cobra interés, sin importar cómo se llegó a este tipo
+        ...(form.tipo === 'congelacion' ? { tasa_interes: 0, con_interes: false } : {}),
       })
     })
     const data = await res.json()
@@ -449,7 +464,7 @@ function NuevoPrestamoContenido() {
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Tasa (%)</label>
-                  {esCongelar ? (
+                  {esCongelacion ? (
                     <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
                       0% — sin interés ❄️
                     </div>

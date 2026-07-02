@@ -485,6 +485,17 @@ Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** →
 ### Refinanciar
 `POST /api/productos` con `es_refinanciacion_de=<id>` → cierra original con estado `refinanciado`.
 
+### Congelación
+Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para diferir una deuda vencida (capital pendiente + interés ya causado) **sin generar interés nuevo**. Se dispara desde el botón ❄️ en el detalle de un crédito, que redirige a `/prestamos/nuevo?congelar=1&...` y usa el flujo de refinanciación (`es_refinanciacion_de`) igual que "Convertir a préstamo". Se excluye de los KPIs de capital del dashboard (`WHERE p.tipo NOT IN (...,'congelacion')`) porque su `monto_capital` mezcla capital viejo + interés causado, no es desembolso nuevo.
+
+**Regla de negocio (blindada 2026-07-02):** una congelación **nunca** cobra interés — `tasa_interes` y `con_interes` deben quedar siempre en 0/false. Antes esto solo se forzaba cuando se entraba por el botón ❄️ (parámetro `?congelar=1`); si el usuario elegía "Congelación" manualmente en el desplegable de Tipo — tanto en `/prestamos/nuevo` como en `/migracion/cargue-inicial` (Cargue Inicial de Saldos, para legalizar créditos antiguos) — la tasa quedaba con el valor que tuviera el formulario (ej. 10%), violando la regla. Se corrigió en **ambos puntos de entrada**, en dos capas cada uno:
+- **`/prestamos/nuevo`** — Frontend (`app/prestamos/nuevo/page.js`): `esCongelacion = esCongelar || form.tipo === 'congelacion'` — un `useEffect` fuerza `tasa_interes:'0'`/`con_interes:false` apenas el tipo es congelación (por cualquier vía), y el campo Tasa se bloquea visualmente (`0% — sin interés ❄️`). Backend (`app/api/productos/route.js`, POST): `tasaSegura`/`conInteresSeguro` fuerzan 0/false cuando `tipo === 'congelacion'`, sin importar lo que envíe el cliente.
+- **`/migracion/cargue-inicial`** — Frontend (`app/migracion/cargue-inicial/page.js`): mismo patrón (`esCongelacion`, `useEffect`, campo bloqueado, payload forzado en `finalizar()`). Backend (`app/api/migracion/cargue-inicial/route.js`): mismas `tasaSegura`/`conInteresSeguro` antes de generar el cronograma (`generarCuotas`) y antes del INSERT en `cred_productos`.
+
+**Patrón a replicar**: cualquier formulario nuevo que permita elegir un `tipo` de crédito con tasa editable debe calcular `esCongelacion = form.tipo === 'congelacion'` y bloquear tasa/interés en cuanto se detecte ese tipo — tanto en el cliente (UX) como en el endpoint que recibe el POST (seguridad real).
+
+**Importante:** el motor de cálculo (`lib/calculos.js`) NO tiene una modalidad "solo interés" (bullet) para ningún tipo de crédito — cualquier pago por encima del interés del período abona a capital de forma incondicional (`app/api/pagos/route.js`). "Congelación" NO sirve para cobrar interés perpetuo sobre un capital que nunca baja; solo difiere mora existente a tasa 0. Si se necesita un crédito que solo cobre interés sin amortizar capital, es una funcionalidad nueva a diseñar (un `comportamiento` adicional en `cred_tipos_prestamo`), no algo ya soportado.
+
 ### Migración masiva
 1. Descargar plantilla Excel (3 tipos: Solo Clientes, Clientes+Deudas, Solo Saldos).
 2. Subir archivo → validar → preview → importar.

@@ -133,6 +133,12 @@ export async function POST(request) {
     const id = uuidv4()
     const capitalFinanciar = parseFloat(monto_capital) - parseFloat(cuota_inicial || 0)
 
+    // Congelación NUNCA cobra interés — se blinda también del lado servidor
+    // (defensa en profundidad) por si el formulario llegara a enviar una tasa
+    // distinta de 0 para este tipo.
+    const tasaSegura      = tipo === 'congelacion' ? 0 : (tasa_interes || 0)
+    const conInteresSeguro = tipo === 'congelacion' ? false : (con_interes !== false)
+
     // ── TRANSACCIÓN: consecutivo + producto + refinanciación + cuotas +
     //    caja + historial. Todo o nada: si la generación de cuotas o el
     //    desembolso fallan, no queda un producto sin plan de pagos ni un
@@ -155,9 +161,9 @@ export async function POST(request) {
           metodo_desembolso,entidad_desembolso,referencia_desembolso
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
         [id, referencia, cliente_id, tipo, capitalFinanciar,
-         tasa_interes||0, periodo_tasa||'mensual',
+         tasaSegura, periodo_tasa||'mensual',
          frecuencia_cobro||'mensual', num_cuotas, fecha_primer_pago,
-         con_interes !== false, metodo_calculo||'plano',
+         conInteresSeguro, metodo_calculo||'plano',
          cuota_inicial||0, descripcion_bien||null,
          valor_comercial_bien||null, fecha_limite_rescate||null, notas||null,
          es_refinanciacion_de||null,
