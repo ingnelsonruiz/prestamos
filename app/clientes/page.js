@@ -16,6 +16,7 @@ export default function ClientesPage() {
   const [clientes, setClientes]     = useState([])
   const [buscar, setBuscar]         = useState('')
   const [filtroPrueba, setFiltroPrueba] = useState('todos') // 'todos' | 'reales' | 'prueba'
+  const [filtroEstado, setFiltroEstado] = useState('todos') // 'todos' | 'activo' | 'en_mora' | 'sin_prestamos'
   const [modal, setModal]           = useState(false)
   const [form, setForm]             = useState(FORM_VACIO)
   const [loading, setLoading]       = useState(false)
@@ -142,6 +143,15 @@ export default function ClientesPage() {
       })
     : clientes
 
+  // ── Segmentador por estado (activo / en mora / sin préstamos) ──────────
+  const nActivos      = clientes.filter(c => c.estado_calculado === 'activo').length
+  const nEnMora       = clientes.filter(c => c.estado_calculado === 'en_mora').length
+  const nSinPrestamos = clientes.filter(c => (c.estado_calculado || 'sin_prestamos') === 'sin_prestamos').length
+
+  const clientesVista = clientesOrdenados.filter(c =>
+    filtroEstado === 'todos' || (c.estado_calculado || 'sin_prestamos') === filtroEstado
+  )
+
   const hoy = new Date().toLocaleDateString('es-CO', { day:'2-digit', month:'2-digit', year:'numeric' })
   const creadosHoy = clientes.filter(c => {
     if (!c.fecha_creacion) return false
@@ -221,12 +231,35 @@ export default function ClientesPage() {
         )}
       </div>
 
+      {/* Segmentador por estado */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {[
+          { key: 'todos',         label: 'Todos',            n: clientes.length,  activo:'bg-slate-700 border-slate-700' },
+          { key: 'activo',        label: '🔵 Activos',        n: nActivos,         activo:'bg-blue-600 border-blue-600' },
+          { key: 'en_mora',       label: '🔴 En mora',        n: nEnMora,          activo:'bg-red-600 border-red-600' },
+          { key: 'sin_prestamos', label: '⚪ Sin préstamos',  n: nSinPrestamos,    activo:'bg-gray-600 border-gray-600' },
+        ].map(({ key, label, n, activo }) => (
+          <button key={key} onClick={() => setFiltroEstado(key)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors
+              ${filtroEstado === key
+                ? `${activo} text-white`
+                : 'bg-white text-gray-600 border-gray-300 hover:border-primary-400'}`}>
+            {label} ({n})
+          </button>
+        ))}
+      </div>
+
+      {/* Contador de resultados tras aplicar el segmentador */}
+      {filtroEstado !== 'todos' && (
+        <p className="text-xs text-gray-500">{clientesVista.length} resultado(s)</p>
+      )}
+
       {/* ── Vista móvil: tarjetas ── */}
       <div className="lg:hidden space-y-2">
-        {clientes.length === 0 && (
-          <p className="text-center text-gray-400 py-10 text-sm">Sin clientes registrados</p>
+        {clientesVista.length === 0 && (
+          <p className="text-center text-gray-400 py-10 text-sm">Sin clientes que coincidan con el filtro</p>
         )}
-        {clientes.map(c => (
+        {clientesVista.map(c => (
           <div key={c.id} className={`rounded-xl border px-4 py-3 ${c.es_prueba ? 'bg-amber-50' : 'bg-white'}`}>
             <div className="flex items-center justify-between gap-3">
               <Link href={`/clientes/${c.id}`} className="flex-1 min-w-0">
@@ -283,7 +316,7 @@ export default function ClientesPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {clientesOrdenados.map(c => (
+            {clientesVista.map(c => (
               <tr key={c.id} className={`hover:bg-gray-50 ${c.es_prueba ? 'bg-amber-50' : ''}`}>
                 <td className="px-4 py-3 font-medium text-gray-900">{c.nombre}</td>
                 <td className="px-4 py-3 text-gray-500">{c.documento}</td>
@@ -330,8 +363,8 @@ export default function ClientesPage() {
             ))}
           </tbody>
         </table>
-        {clientes.length === 0 && (
-          <p className="text-center text-gray-400 py-10 text-sm">Sin clientes registrados</p>
+        {clientesVista.length === 0 && (
+          <p className="text-center text-gray-400 py-10 text-sm">Sin clientes que coincidan con el filtro</p>
         )}
       </div>
 
