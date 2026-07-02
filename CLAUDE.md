@@ -378,6 +378,7 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 |--------|------|-------|
 | POST | `/api/migracion` | Importación masiva. Crea clientes + saldos como cuentas abiertas |
 | POST | `/api/migracion/reset` | Borra préstamos, cuotas, pagos y caja. Conserva clientes y usuarios |
+| POST | `/api/migracion/reset-cliente` | Borra créditos de **un** cliente. Body: `{ clienteId, productoIds? }`. Si `productoIds` viene vacío/ausente borra TODOS los créditos del cliente (compat. hacia atrás); si trae ids, borra **solo esos** créditos (y sus cuotas/pagos/movimientos/recálculos), dejando el resto del cliente intacto. Filtra siempre por `producto_id`, nunca por `cliente_id`, para permitir borrado parcial |
 
 ### Config
 | Método | Ruta | Notas |
@@ -419,8 +420,20 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 - JWT HS256 con `jose`, cookie HttpOnly `itl_session` (8h).
 - Rutas públicas: `/login`, `/estado/*`, `/api/auth/*`, `/api/estado/*`.
 - Roles: `admin` (acceso total) / `operador` (operación diaria). `/backup` y `/configuracion` (mutaciones) requieren `admin`.
-- Variables `.env.local` (modo directo): `DB_HOST`, `DB_PORT=5435`, `DB_NAME=base_sie_dusakawi`, `DB_USER`, `DB_PASSWORD`, `DB_SCHEMA=administrativo`, `JWT_SECRET`.
-- Variables modo cloud/proxy: `PROXY_URL`, `PROXY_API_KEY` (si están definidas, `lib/db.js` usa el proxy HTTP en lugar del pool directo).
+- Variables `.env.local` (modo directo, valor real de producción): `DB_HOST=aws-1-us-east-2.pooler.supabase.com`, `DB_PORT=6543`, `DB_NAME=postgres`, `DB_USER=postgres.fecnicckenqlmpqefkth`, `DB_PASSWORD`, `DB_SCHEMA=administrativo`, `JWT_SECRET`. La BD es un proyecto **Supabase** propio de Programa_Creditos (distinto de `base_sie_dusakawi` que usa Proyecto RCV).
+- Variables modo cloud/proxy: `PROXY_URL`, `PROXY_API_KEY` (si están definidas, `lib/db.js` usa el proxy HTTP en lugar del pool directo). Actualmente **no está en uso** para este proyecto — se conecta directo al pooler de Supabase.
+
+### ⚠️ Incidente 2026-07-02 — `(EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15`
+
+**Síntoma:** login y todas las páginas mostraban "Sin conexión a la base de datos" con ese error en rojo, en producción (Vercel).
+
+**Causa:** `DB_PORT=5432` apunta al pooler de Supabase en **modo "Session"** (Supavisor), que en el plan de este proyecto tiene `pool_size: 15`. En modo Session cada conexión retiene un backend de Postgres dedicado durante toda su vida (hasta `idleTimeoutMillis`). Como la app corre en **Vercel serverless**, cada invocación fría crea su propio `Pool` (`max: 3`, singleton solo dentro de esa instancia vía `globalThis.__pg_pool` — no es global entre instancias). Con varias invocaciones concurrentes (dashboard + prestamos + cobros en paralelo, o varios usuarios a la vez) se agotan los 15 backends casi de inmediato.
+
+**Fix:** cambiar `DB_PORT` a **`6543`** (pooler de Supabase en modo **"Transaction"**). En ese modo PgBouncer devuelve la conexión al pool apenas termina cada transacción en vez de retenerla toda la sesión del cliente, permitiendo muchas invocaciones cortas concurrentes sobre un pool pequeño. Es la recomendación oficial de Supabase para entornos serverless/edge. No rompe `withTransaction()` (lib/db.js): ese código usa `pool.connect()` con un único cliente dedicado durante todo el `BEGIN…COMMIT`, que es justo el patrón que el modo transacción soporta.
+
+**Acción pendiente:** el cambio en `.env.local` solo afecta desarrollo local. **Hay que actualizar `DB_PORT=6543` en las variables de entorno del proyecto en Vercel (Settings → Environment Variables) y volver a desplegar** para que tome efecto en producción.
+
+**Si vuelve a ocurrir** tras el cambio de puerto: bajar `max` en `createPool()` (lib/db.js, hoy en `3`), o migrar este proyecto al modo proxy HTTP (`PROXY_URL`) como ya hace Proyecto RCV — desacopla las conexiones de Postgres del escalado serverless de Vercel por completo.
 
 ---
 
@@ -524,6 +537,7 @@ Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** →
 - Hero card blanco con barra de acento de color (rojo=mora, azul=activo, verde=sin deuda).
 - Tabs de filtro con colores: Activos (navy), Saldados (verde), Refinanciados (morado), Todos (gris).
 - QR del estado de cuenta con opciones: Copiar QR, Descargar QR, Copiar enlace, Ver página, Enviar por WhatsApp.
+- **Listado `/clientes`**: dos segmentadores independientes y combinables — (1) Todos/Reales/Prueba (`filtroPrueba`, va al backend vía `solo_prueba`), (2) **Todos/Activos/En mora/Sin préstamos** (`filtroEstado`, filtrado en cliente sobre `c.estado_calculado` que ya trae `GET /api/clientes` calculado dinámicamente por fecha de vencimiento — no por un campo `estado` almacenado). Cada botón muestra su contador.
 
 ### Préstamos (`/prestamos`)
 - Agrupado por cliente con: nombre, teléfono (chip verde), dirección.
@@ -542,6 +556,8 @@ Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** →
 - Acordeón por crédito: nombre (grande), tipo+descripción (bold), fecha del préstamo, capital, teléfono.
 - Cuando hay mora: chip rojo + botón WhatsApp de cobro con mensaje pre-cargado.
 - **Arqueo del día**: programado vs cobrado, barra de progreso, por método, lista de pagos del día.
+- **Segmentador Clientes/Empresas/Todos** y **tramos de la "Brújula de cobro"** (Todas, Vencidas, Hoy, Mañana, 7 días, 15 días): al cambiar de tramo los acordeones quedan **cerrados** (`setAbiertos({})`); el usuario decide cuál abrir. Abrir un crédito (`toggle()`) dispara `fetchHistorial(producto_id)` bajo demanda.
+- **Bug corregido (2026-07-02) — historial "Cargando..." indefinido**: los botones de tramo, el rango de fechas y el buscador abrían TODOS los acordeones en bloque (`setAbiertos({...todos})`) sin llamar `fetchHistorial()`, que solo se disparaba desde el `toggle()` manual. Resultado: el spinner "⏳ Cargando historial..." quedaba girando para siempre en los créditos abiertos en bloque. Se corrigió: (a) los tramos de la Brújula ahora **cierran** los acordeones al cambiar de filtro (arriba); (b) el rango de fechas y el buscador, que sí necesitan mostrar resultados abiertos, usan el helper `abrirTodos()` / disparan `fetchHistorial()` para cada crédito recién abierto que no tenga historial en `historialPagos`.
 
 ### Recibos (`/recibos`)
 - Búsqueda por `REC-000001` o solo el número (`1`).
@@ -560,6 +576,7 @@ Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** →
 - **Zona de desarrollo**:
   - Toggle **Modo prueba** (fechas futuras en pagos) — persiste en BD.
   - Botón **Limpiar datos de prueba** con triple confirmación (escribir "LIMPIAR").
+  - **Limpiar cliente específico**: busca por nombre/documento → trae la lista de créditos del cliente (`GET /api/productos?cliente_id=`) con checkbox por crédito + "Seleccionar/Deseleccionar todos" (marcados por defecto) → al confirmar envía solo los `productoIds` marcados a `POST /api/migracion/reset-cliente`. Permite borrar un crédito puntual de un cliente con varios créditos sin tocar los demás (antes solo existía "borrar todos los créditos del cliente").
 
 ### Configuración (`/configuracion`) — solo admin
 - Gestión de **tipos de préstamo** dinámicos (CRUD).

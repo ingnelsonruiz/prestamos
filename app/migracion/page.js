@@ -140,17 +140,20 @@ function BotonReset() {
 
 // ── Limpiar datos de un cliente específico ────────────────────────────────────
 function BotonResetCliente() {
-  const [busqueda, setBusqueda]   = useState('')
-  const [buscando, setBuscando]   = useState(false)
-  const [cliente, setCliente]     = useState(null)
-  const [errorBusq, setErrorBusq] = useState('')
-  const [fase, setFase]           = useState(0)   // 0=buscar 1=confirmar 2=ejecutando
-  const [resultado, setResultado] = useState(null)
-  const [errorEjec, setErrorEjec] = useState('')
+  const [busqueda, setBusqueda]     = useState('')
+  const [buscando, setBuscando]     = useState(false)
+  const [cliente, setCliente]       = useState(null)
+  const [errorBusq, setErrorBusq]   = useState('')
+  const [fase, setFase]             = useState(0)   // 0=buscar 1=confirmar 2=ejecutando
+  const [resultado, setResultado]   = useState(null)
+  const [errorEjec, setErrorEjec]   = useState('')
+  const [creditos, setCreditos]     = useState([])
+  const [cargandoCred, setCargandoCred] = useState(false)
+  const [seleccionados, setSeleccionados] = useState(new Set())
 
   const buscar = async () => {
     if (!busqueda.trim()) return
-    setBuscando(true); setErrorBusq(''); setCliente(null); setResultado(null)
+    setBuscando(true); setErrorBusq(''); setCliente(null); setResultado(null); setCreditos([]); setSeleccionados(new Set())
     try {
       const res  = await fetch(`/api/clientes?q=${encodeURIComponent(busqueda.trim())}`)
       const data = await res.json()
@@ -160,11 +163,34 @@ function BotonResetCliente() {
       } else if (lista.length > 1) {
         setErrorBusq(`Se encontraron ${lista.length} clientes. Usa el documento exacto para ser más preciso.`)
       } else {
-        setCliente({ id: lista[0].id, nombre: lista[0].nombre, documento: lista[0].documento })
+        const c = { id: lista[0].id, nombre: lista[0].nombre, documento: lista[0].documento }
+        setCliente(c)
+        setCargandoCred(true)
+        try {
+          const resP  = await fetch(`/api/productos?cliente_id=${c.id}`)
+          const dataP = await resP.json()
+          const listaP = Array.isArray(dataP) ? dataP : (dataP.productos ?? [])
+          setCreditos(listaP)
+          // Por defecto quedan todos marcados (mismo comportamiento de "borrar todo" de antes),
+          // el usuario puede desmarcar los que quiera conservar.
+          setSeleccionados(new Set(listaP.map(p => p.id)))
+        } finally { setCargandoCred(false) }
         setFase(1)
       }
     } catch { setErrorBusq('Error de conexión al buscar el cliente.') }
     finally  { setBuscando(false) }
+  }
+
+  const toggleCredito = (id) => {
+    setSeleccionados(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const toggleTodos = () => {
+    setSeleccionados(prev => prev.size === creditos.length ? new Set() : new Set(creditos.map(c => c.id)))
   }
 
   const ejecutar = async () => {
@@ -172,15 +198,15 @@ function BotonResetCliente() {
     try {
       const res  = await fetch('/api/migracion/reset-cliente', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clienteId: cliente.id }),
+        body: JSON.stringify({ clienteId: cliente.id, productoIds: Array.from(seleccionados) }),
       })
       const data = await res.json()
-      if (data.ok) { setResultado(data); setFase(0); setBusqueda(''); setCliente(null) }
+      if (data.ok) { setResultado(data); setFase(0); setBusqueda(''); setCliente(null); setCreditos([]); setSeleccionados(new Set()) }
       else { setErrorEjec(data.error || 'Error desconocido.'); setFase(1) }
     } catch { setErrorEjec('Error de conexión.'); setFase(1) }
   }
 
-  const cancelar = () => { setFase(0); setCliente(null); setBusqueda(''); setErrorBusq(''); setErrorEjec('') }
+  const cancelar = () => { setFase(0); setCliente(null); setBusqueda(''); setErrorBusq(''); setErrorEjec(''); setCreditos([]); setSeleccionados(new Set()) }
 
   return (
     <div className="bg-orange-50 border-2 border-orange-200 rounded-2xl p-5 space-y-3">
@@ -188,7 +214,7 @@ function BotonResetCliente() {
         <span className="text-3xl">🎯</span>
         <div>
           <p className="font-bold text-orange-700">Limpiar cliente específico</p>
-          <p className="text-xs text-orange-500">Borra solo los préstamos, cuotas y pagos de un cliente. <strong>El cliente y los demás no se tocan.</strong></p>
+          <p className="text-xs text-orange-500">Borra los créditos de un cliente — todos o solo los que elijas. <strong>El cliente y los demás no se tocan.</strong></p>
         </div>
       </div>
 
@@ -204,7 +230,7 @@ function BotonResetCliente() {
       {/* Eliminado correctamente */}
       {resultado && !resultado.sinMovimientos && (
         <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 space-y-1">
-          <p className="font-semibold">✅ Datos de <strong>{resultado.cliente.nombre}</strong> eliminados correctamente.</p>
+          <p className="font-semibold">✅ Créditos de <strong>{resultado.cliente.nombre}</strong> eliminados correctamente.</p>
           <p className="text-xs text-green-600">
             {resultado.eliminado.prods} préstamo(s) · {resultado.eliminado.cuotas} cuota(s) · {resultado.eliminado.pagos} pago(s) · {resultado.eliminado.movimientos} mov. de caja
           </p>
@@ -232,21 +258,62 @@ function BotonResetCliente() {
         </div>
       )}
 
-      {/* Fase 1: confirmar */}
+      {/* Fase 1: elegir créditos y confirmar */}
       {fase === 1 && cliente && (
         <div className="space-y-3">
           <div className="bg-white border-2 border-orange-300 rounded-xl px-4 py-3">
             <p className="text-sm font-bold text-gray-800">{cliente.nombre}</p>
             <p className="text-xs text-gray-500">CC / Doc: {cliente.documento}</p>
           </div>
-          <div className="bg-orange-100 border border-orange-300 rounded-xl p-3 text-sm text-orange-800 font-semibold text-center">
-            ⚠️ Se borrarán TODOS los préstamos, cuotas y pagos de este cliente.<br/>
-            <span className="font-normal text-xs">Esta acción NO se puede deshacer.</span>
-          </div>
+
+          {cargandoCred && (
+            <p className="text-center text-sm text-orange-600 py-2">⏳ Cargando créditos del cliente...</p>
+          )}
+
+          {!cargandoCred && creditos.length === 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-700">
+              Este cliente no tiene créditos registrados.
+            </div>
+          )}
+
+          {!cargandoCred && creditos.length > 0 && (
+            <div className="bg-white border-2 border-orange-300 rounded-xl overflow-hidden">
+              <button onClick={toggleTodos}
+                className="w-full flex items-center gap-2 px-4 py-2 bg-orange-100 hover:bg-orange-200 text-xs font-semibold text-orange-800 border-b border-orange-200">
+                <input type="checkbox" readOnly checked={seleccionados.size === creditos.length} className="accent-orange-700" />
+                {seleccionados.size === creditos.length ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                <span className="ml-auto font-normal text-orange-500">{seleccionados.size} de {creditos.length} seleccionado(s)</span>
+              </button>
+              <div className="max-h-64 overflow-y-auto divide-y divide-orange-100">
+                {creditos.map(cr => (
+                  <label key={cr.id} className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-orange-50 cursor-pointer">
+                    <input type="checkbox" checked={seleccionados.has(cr.id)} onChange={() => toggleCredito(cr.id)} className="accent-orange-700" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-gray-800 truncate">
+                        {cr.referencia || cr.id.slice(0, 8)} <span className="text-gray-400 font-normal capitalize">· {cr.tipo}</span>
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Capital {fmt(cr.monto_capital)} · Pendiente {fmt(cr.capital_pendiente)} · <span className="capitalize">{cr.estado}</span>
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {creditos.length > 0 && (
+            <div className="bg-orange-100 border border-orange-300 rounded-xl p-3 text-sm text-orange-800 font-semibold text-center">
+              ⚠️ Se borrarán {seleccionados.size === creditos.length ? 'TODOS los créditos' : `${seleccionados.size} crédito(s)`} seleccionados, con sus cuotas y pagos.<br/>
+              <span className="font-normal text-xs">Esta acción NO se puede deshacer.</span>
+            </div>
+          )}
+
           {errorEjec && <p className="text-xs text-red-600 font-medium text-center">{errorEjec}</p>}
           <div className="flex gap-2">
             <button onClick={cancelar} className="flex-1 border rounded-xl py-2 text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
-            <button onClick={ejecutar} className="flex-1 bg-orange-700 text-white rounded-xl py-2 text-sm font-bold hover:bg-orange-800">
+            <button onClick={ejecutar} disabled={creditos.length > 0 && seleccionados.size === 0}
+              className="flex-1 bg-orange-700 text-white rounded-xl py-2 text-sm font-bold hover:bg-orange-800 disabled:opacity-40">
               🗑️ Confirmar limpieza
             </button>
           </div>
