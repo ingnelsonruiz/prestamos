@@ -111,6 +111,22 @@ export default function Dashboard() {
   const [detalleRecogidos, setDetalleRecogidos] = useState(null)
   const [cargandoRecogidos, setCargandoRecogidos] = useState(false)
 
+  // Modal detalle capital en la calle
+  const [modalCapital, setModalCapital] = useState(false)
+  const [detalleCapital, setDetalleCapital] = useState(null)
+  const [cargandoCapital, setCargandoCapital] = useState(false)
+
+  const abrirDetalleCapital = async () => {
+    setModalCapital(true)
+    setCargandoCapital(true)
+    setDetalleCapital(null)
+    // No usa el rango de fechas: la tarjeta "Capital en la calle" tampoco lo usa.
+    const res = await fetch('/api/dashboard/capital-detalle')
+    const json = await res.json()
+    setDetalleCapital(json)
+    setCargandoCapital(false)
+  }
+
   const abrirDetalleRecogidos = async () => {
     setModalRecogidos(true)
     setCargandoRecogidos(true)
@@ -215,6 +231,7 @@ export default function Dashboard() {
           valor={fmt(capital.en_calle)}
           sub="Saldo pendiente de créditos activos"
           bg="bg-gradient-to-br from-[#1e3a5f] to-[#1a4a7a]"
+          onDoubleClick={abrirDetalleCapital}
         />
         <HeroCard
           titulo="📈 Intereses proyectados"
@@ -563,6 +580,71 @@ export default function Dashboard() {
                       </td>
                       <td className="px-3 pt-3 text-right text-base font-black text-emerald-700">
                         {fmt(detalleIntereses.reduce((s, d) => s + d.interes_proyectado, 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal detalle capital en la calle */}
+      {modalCapital && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setModalCapital(false) }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b rounded-t-2xl bg-gradient-to-br from-[#1e3a5f] to-[#1a4a7a]">
+              <div>
+                <h3 className="text-white font-bold text-lg">Detalle de capital en la calle</h3>
+                <p className="text-blue-100 text-xs mt-0.5">Saldo de capital pendiente por crédito activo (no depende del rango de fechas)</p>
+              </div>
+              <button onClick={() => setModalCapital(false)}
+                className="text-white/80 hover:text-white text-2xl leading-none font-bold px-2">x</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {cargandoCapital && <div className="text-center text-gray-400 py-12">Cargando...</div>}
+              {!cargandoCapital && detalleCapital && detalleCapital.length === 0 && (
+                <div className="text-center text-gray-400 py-12">Sin capital pendiente</div>
+              )}
+              {!cargandoCapital && detalleCapital && detalleCapital.length > 0 && (
+                <table className="w-full text-sm border-separate border-spacing-y-1">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wide text-gray-400">
+                      <th className="text-left px-3 py-2">Cliente</th>
+                      <th className="text-left px-3 py-2">Credito</th>
+                      <th className="text-center px-3 py-2">Cuotas</th>
+                      <th className="text-left px-3 py-2">Prox. vence</th>
+                      <th className="text-right px-3 py-2 text-[#1a4a7a]">Capital pendiente</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalleCapital.map(d => (
+                      <tr key={d.producto_id} className="bg-gray-50 hover:bg-blue-50 rounded-lg transition-colors">
+                        <td className="px-3 py-2 rounded-l-lg">
+                          <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-[#1a4a7a] hover:underline block">{d.nombre_cliente}</a>
+                          <span className="text-[11px] text-gray-400">{d.documento}</span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <a href={'/prestamos/' + d.producto_id} className="text-blue-600 hover:underline font-mono text-xs">{d.referencia || d.producto_id.slice(0,8)}</a>
+                          <span className="block text-[11px] text-gray-400 capitalize">{d.tipo_producto} - {fmt(d.monto_capital)}</span>
+                        </td>
+                        <td className="px-3 py-2 text-center text-gray-600 font-semibold">{d.cuotas_pendientes}</td>
+                        <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
+                          {d.proxima_fecha ? new Date(d.proxima_fecha + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '-'}
+                        </td>
+                        <td className="px-3 py-2 text-right rounded-r-lg font-bold text-[#1a4a7a]">{fmt(d.capital_pendiente)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan="4" className="px-3 pt-3 text-sm font-semibold text-gray-600">
+                        Total ({detalleCapital.length} credito{detalleCapital.length !== 1 ? 's' : ''})
+                      </td>
+                      <td className="px-3 pt-3 text-right text-base font-black text-[#1a4a7a]">
+                        {fmt(detalleCapital.reduce((s, d) => s + d.capital_pendiente, 0))}
                       </td>
                     </tr>
                   </tfoot>
