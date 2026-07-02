@@ -35,7 +35,10 @@ function PrestamosContent() {
     const q = buscar.toLowerCase()
     const matchBuscar = !q || p.nombre_cliente?.toLowerCase().includes(q) || p.documento?.toLowerCase().includes(q)
       || p.nombre_empresa?.toLowerCase().includes(q) || p.descripcion_bien?.toLowerCase().includes(q)
-    const matchEstado   = filtroEstado === 'todos' || (filtroEstado === 'activos' && !['saldado','refinanciado'].includes(p.estado)) || filtroEstado === p.estado
+    const matchEstado   = filtroEstado === 'todos'
+      || (filtroEstado === 'activos' && !['saldado','refinanciado'].includes(p.estado))
+      || (filtroEstado === 'en_mora' && Number(p.cuotas_mora) > 0 && !['saldado','refinanciado'].includes(p.estado))
+      || (filtroEstado !== 'en_mora' && filtroEstado === p.estado)
     const matchSegmento = segmento === 'todos'
       || (segmento === 'clientes'  && !p.es_prestamo_interno)
       || (segmento === 'empresas'  &&  p.es_prestamo_interno)
@@ -203,7 +206,7 @@ function PrestamosContent() {
                 </colgroup>
                 <tbody className="divide-y divide-gray-100">
                   {cli.items.map(p => (
-                    <tr key={p.id} className={`hover:bg-gray-50 ${p.estado==='en_mora'?'bg-red-50/40':p.estado==='refinanciado'?'opacity-60':''}`}>
+                    <tr key={p.id} className={`hover:bg-gray-50 ${(p.estado==='en_mora'||Number(p.cuotas_mora)>0)?'bg-red-50/40':p.estado==='refinanciado'?'opacity-60':''}`}>
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className={`text-sm px-2.5 py-0.5 rounded-full font-semibold ${p.es_prestamo_interno ? tipoColor.inversion : (tipoColor[p.tipo]||'bg-gray-100 text-gray-600')}`}>
