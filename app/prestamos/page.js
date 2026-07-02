@@ -129,6 +129,34 @@ function PrestamosContent() {
         ))}
       </div>
 
+      {/* Desglose capital prestado / interés pendiente / capital recuperado —
+          calculado sobre `filtrados` (respeta pestaña de estado, segmento y búsqueda) */}
+      {(() => {
+        const capitalPrestado    = filtrados.reduce((s,p)=>s+parseFloat(p.monto_capital||0),0)
+        const interesPendiente   = filtrados.reduce((s,p)=>s+parseFloat(p.interes_pendiente||0),0)
+        const capitalPendienteReal = filtrados.reduce((s,p)=>s+parseFloat(p.capital_pendiente_real||0),0)
+        const capitalRecuperado  = Math.max(0, capitalPrestado - capitalPendienteReal)
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">💰 Capital prestado</p>
+              <p className="text-lg font-black text-gray-800 mt-0.5">{fmt(capitalPrestado)}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Desembolsado en {filtrados.length} crédito{filtrados.length!==1?'s':''}</p>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-[11px] uppercase tracking-wide font-semibold text-emerald-500">📈 Interés pendiente</p>
+              <p className="text-lg font-black text-emerald-600 mt-0.5">{fmt(interesPendiente)}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Por cobrar de estos créditos</p>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-[11px] uppercase tracking-wide font-semibold text-blue-500">✅ Capital recuperado</p>
+              <p className="text-lg font-black text-blue-600 mt-0.5">{fmt(capitalRecuperado)}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Ya abonado a capital (queda {fmt(capitalPendienteReal)} pendiente)</p>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Búsqueda + filtros */}
       <div className="flex flex-col gap-3">
         <input type="text"

@@ -22,6 +22,14 @@ export async function GET(request) {
                  AND cu.fecha_vencimiento <> DATE '2099-12-31'
              ) AS cuotas_mora,
              COALESCE(SUM(cu.monto_cuota - cu.monto_pagado) FILTER (WHERE cu.estado != 'pagada'),0) AS capital_pendiente,
+             -- Desglose real (capital_pendiente de arriba mezcla capital+interés pese al nombre):
+             -- capital_pendiente_real usa solo abono_capital, interes_pendiente solo abono_interes.
+             COALESCE(SUM(
+               cu.abono_capital * (1 - LEAST(cu.monto_pagado, cu.monto_cuota) / NULLIF(cu.monto_cuota, 0))
+             ) FILTER (WHERE cu.estado != 'pagada'), 0) AS capital_pendiente_real,
+             COALESCE(SUM(
+               cu.abono_interes * (1 - LEAST(cu.monto_pagado, cu.monto_cuota) / NULLIF(cu.monto_cuota, 0))
+             ) FILTER (WHERE cu.estado != 'pagada'), 0) AS interes_pendiente,
              por.referencia  AS ref_nuevo,
              orig.referencia AS ref_origen
       FROM ${S}.cred_productos p

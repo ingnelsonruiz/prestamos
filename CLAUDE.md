@@ -344,7 +344,7 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 ### Productos
 | Método | Ruta | Notas |
 |--------|------|-------|
-| GET | `/api/productos?cliente_id=` | Incluye `telefono`, `direccion`, `ref_nuevo`, `ref_origen` (referencias de refinanciación) |
+| GET | `/api/productos?cliente_id=` | Incluye `telefono`, `direccion`, `ref_nuevo`, `ref_origen` (referencias de refinanciación). También `capital_pendiente_real` e `interes_pendiente` (desglose correcto; el `capital_pendiente` original mezcla capital+interés pese al nombre — ver §10 "Préstamos") |
 | POST | `/api/productos` | Fiado/adelanto: cuenta abierta. Otros: genera cuotas. Asigna `referencia` (CRED-XXXXXX) y `metodo_desembolso`. Snapshot de creación en `cred_historial_recalculos`. |
 | GET/PUT | `/api/productos/[id]` | |
 | POST | `/api/productos/[id]/liquidar` | Liquidación anticipada con valor acordado |
@@ -557,6 +557,7 @@ Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para 
 - Agrupado por cliente con: nombre, teléfono (chip verde), dirección.
 - Chips de refinanciación en columna de estado.
 - Tabs: Activos, Todos, Saldados, **En mora**, Refinanciados. El tab **En mora** filtra por `cuotas_mora > 0` (dinámico, no por el campo `estado` — ver §9 "Convención de mora"). Fila resaltada en rojo con el mismo criterio.
+- **Panel de desglose (2026-07-02)**: debajo de las tarjetas Todos/Clientes/Empresas, 3 tarjetas — Capital prestado (`SUM(p.monto_capital)`), Interés pendiente, Capital recuperado (prestado − pendiente real) — calculadas sobre `filtrados` (respeta la pestaña de estado, el segmento Clientes/Empresas y la búsqueda). Se agregó porque el campo `capital_pendiente` que ya traía `GET /api/productos` **mezcla capital + interés pese al nombre** (`monto_cuota - monto_pagado`, no solo `abono_capital`) y confundía al usuario sobre cuánto de la deuda total pendiente era capital vs. interés. Se agregaron dos campos nuevos al mismo endpoint para el desglose real: `capital_pendiente_real` (solo `abono_capital`) e `interes_pendiente` (solo `abono_interes`), con la misma fórmula ponderada que ya usa el dashboard (`abono_capital/interes * (1 - pagado/cuota)`). El campo `capital_pendiente` original **se deja intacto** (otras pantallas ya dependen de él) — el desglose correcto vive en los dos campos nuevos.
 
 ### Detalle del crédito (`/prestamos/[id]`)
 - KPIs: Capital desembolsado, Intereses totales, **Total proyectado**, Cobrado, Saldo pendiente, **Saldo solo capital**, Avance cuotas.
