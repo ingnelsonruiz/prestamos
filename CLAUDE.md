@@ -503,7 +503,9 @@ Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** →
 | `17_check_estado_cuota.sql` | **Blindaje**: `CHECK chk_cred_cuotas_estado IN ('pendiente','parcial','pagada')` para impedir que se vuelva a persistir `'mora'`. Ejecutar después de la 16 |
 | `18_fix_cuotas_sobrepagadas.sql` | Corrige cuotas con `monto_pagado > monto_cuota` (excedente a capital): fija `monto_cuota = monto_pagado` y `abono_capital = monto_pagado − abono_interes`. Evita "saldo pendiente" negativo en el detalle. Idempotente |
 
-> **Convención de mora**: `cred_cuotas.estado` ∈ {`pendiente`,`parcial`,`pagada`}. La **mora NO es un estado almacenado**; se deriva por `fecha_vencimiento < CURRENT_DATE` en cada consulta (Cobros, dashboard, informes, listados de clientes/productos). El cargue inicial fija la mora solo a nivel de **producto** (`estado='en_mora'`), nunca en la cuota.
+> **Convención de mora**: `cred_cuotas.estado` ∈ {`pendiente`,`parcial`,`pagada`}. La **mora NO es un estado almacenado**; se deriva por `fecha_vencimiento < CURRENT_DATE` en cada consulta (Cobros, dashboard, informes, listados de clientes/productos). El cargue inicial fija la mora solo a nivel de **producto** (`estado='en_mora'`), nunca en la cuota. **`cred_productos.estado` tampoco se re-evalúa después de creado** (ningún endpoint lo transiciona a `'en_mora'` salvo el cargue inicial), por lo que ningún filtro o vista debe usar `p.estado === 'en_mora'` para detectar mora real; usar siempre el conteo dinámico `cuotas_mora` que expone `GET /api/productos` (cuotas con `fecha_vencimiento < CURRENT_DATE`, `estado != 'pagada'` y `fecha_vencimiento <> '2099-12-31'`).
+>
+> **Bug corregido (2026-07-02)**: la pestaña "En mora" de `/prestamos` filtraba por `p.estado === 'en_mora'` (valor casi siempre desactualizado) y no mostraba créditos que el Dashboard sí contaba (cálculo dinámico por `cuotas_mora`). Se corrigió `app/prestamos/page.js` para que el filtro y el resaltado de fila usen `Number(p.cuotas_mora) > 0` (excluyendo `saldado`/`refinanciado`), igual que el Dashboard. Replicar este mismo criterio en cualquier vista nueva de mora.
 
 > **`00_schema_completo.sql`**: estructura completa **idempotente** (`IF NOT EXISTS` en todo). Sirve para levantar la BD desde cero o normalizar una existente. El endpoint `POST /api/backup/estructura` ejecuta esta misma estructura desde la app.
 
@@ -526,6 +528,7 @@ Desde el detalle de un fiado/adelanto → botón **"Convertir a préstamo"** →
 ### Préstamos (`/prestamos`)
 - Agrupado por cliente con: nombre, teléfono (chip verde), dirección.
 - Chips de refinanciación en columna de estado.
+- Tabs: Activos, Todos, Saldados, **En mora**, Refinanciados. El tab **En mora** filtra por `cuotas_mora > 0` (dinámico, no por el campo `estado` — ver §9 "Convención de mora"). Fila resaltada en rojo con el mismo criterio.
 
 ### Detalle del crédito (`/prestamos/[id]`)
 - KPIs: Capital desembolsado, Intereses totales, **Total proyectado**, Cobrado, Saldo pendiente, **Saldo solo capital**, Avance cuotas.
@@ -647,7 +650,7 @@ npm start
 
 ## 16. Puntos de Extensión / Mejoras Pendientes
 
-- **Mora automática**: no hay job que actualice `estado='mora'`; se detecta por comparación de fechas en queries.
+- **Mora automática**: no hay job que actualice `estado='mora'`; se detecta por comparación de fechas en queries. Consecuencia conocida: cualquier UI que filtre por `p.estado==='en_mora'` en vez de `cuotas_mora` mostrará resultados incompletos/vacíos (bug real detectado y corregido en `/prestamos` el 2026-07-02, ver §9).
 - **Notificaciones**: candidato para cron + SMS/WhatsApp.
 - **Multiempresa**: esquema fijo `administrativo`; para multitenancy parametrizar.
 - **Tests**: sin suite de pruebas; prioridad en `lib/calculos.js`.

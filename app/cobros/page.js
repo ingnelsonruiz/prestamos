@@ -107,6 +107,19 @@ export default function CobrosPage() {
     })
   }
 
+  // Abre TODOS los acordeones (usado por los tramos de la Brújula y el rango
+  // de fechas) y dispara la carga de historial de los que aún no la tengan.
+  // Sin esto, los créditos abiertos en bloque se quedaban en "Cargando
+  // historial..." indefinidamente porque solo `toggle()` disparaba el fetch.
+  const abrirTodos = () => {
+    const ab = {}
+    grupos.forEach(g => {
+      ab[g.producto_id] = true
+      if (!historialPagos[g.producto_id]) fetchHistorial(g.producto_id)
+    })
+    setAbiertos(ab)
+  }
+
   const esFutura = c => c.fecha_vencimiento?.split('T')[0] > hoy
   const esMora   = c => c.fecha_vencimiento?.split('T')[0] < hoy
   const pendiente = c => parseFloat(c.monto_cuota) - parseFloat(c.monto_pagado||0)
@@ -552,8 +565,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
               <button key={t.k}
                 onClick={() => {
                   setFiltro(t.k)
-                  if (t.k === 'todas') setAbiertos({})
-                  else { const ab = {}; grupos.forEach(g => { ab[g.producto_id] = true }); setAbiertos(ab) }
+                  setAbiertos({})
                 }}
                 className={`text-left rounded-xl p-3 transition-all ${activo
                   ? `${t.solid} text-white shadow-lg scale-[1.05] ring-2 ring-white/70`
@@ -613,6 +625,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                 if (g.nombre_cliente?.toLowerCase().includes(q.toLowerCase()) ||
                     g.descripcion?.toLowerCase().includes(q.toLowerCase())) {
                   nuevosAbiertos[g.producto_id] = true
+                  if (!historialPagos[g.producto_id]) fetchHistorial(g.producto_id)
                 }
               })
               setAbiertos(nuevosAbiertos)
@@ -627,12 +640,12 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
               <input type="date" max={hoy}
                 className="border rounded-lg px-2 py-1.5 text-sm flex-1 min-w-0"
                 value={fechaDesde}
-                onChange={e => { setFechaDesde(e.target.value); setFiltro('rango'); const ab={}; grupos.forEach(g=>{ab[g.producto_id]=true}); setAbiertos(ab) }} />
+                onChange={e => { setFechaDesde(e.target.value); setFiltro('rango'); abrirTodos() }} />
               <span className="text-xs text-gray-400 flex-shrink-0">al</span>
               <input type="date" max={hoy}
                 className="border rounded-lg px-2 py-1.5 text-sm flex-1 min-w-0"
                 value={fechaHasta}
-                onChange={e => { setFechaHasta(e.target.value); setFiltro('rango'); const ab={}; grupos.forEach(g=>{ab[g.producto_id]=true}); setAbiertos(ab) }} />
+                onChange={e => { setFechaHasta(e.target.value); setFiltro('rango'); abrirTodos() }} />
               {(fechaDesde||fechaHasta) && (
                 <button onClick={()=>{setFechaDesde('');setFechaHasta('');setFiltro('todas');setAbiertos({})}}
                   className="text-xs text-red-400 hover:text-red-600 flex-shrink-0">✕</button>
