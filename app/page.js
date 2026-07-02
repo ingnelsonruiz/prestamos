@@ -85,7 +85,8 @@ function EstadoCard({ label, icono, capital, count, bg, border, text, filtro }) 
       </div>
       <p className={`text-[11px] uppercase tracking-wide font-semibold ${text} opacity-70`}>{label}</p>
       <p className={`text-lg font-black ${text} mt-0.5`}>{fmt(capital)}</p>
-      <p className={`text-[10px] mt-1.5 ${text} opacity-40`}>↗ doble clic para ver</p>
+      <p className={`text-[10px] ${text} opacity-50`}>capital desembolsado (no es el saldo pendiente)</p>
+      <p className={`text-[10px] mt-1 ${text} opacity-40`}>↗ doble clic para ver</p>
     </div>
   )
 }
