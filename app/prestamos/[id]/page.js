@@ -311,6 +311,19 @@ export default function DetallePrestamo() {
         </div>
       )}
 
+      {/* Aviso: este crédito tiene el interés congelado (fijo sobre capital original) */}
+      {data.interes_fijo && (
+        <div className="bg-cyan-50 border border-cyan-300 rounded-lg px-4 py-3 text-sm text-cyan-800 flex items-center gap-2">
+          <span className="text-lg">❄️</span>
+          <span>
+            Este crédito tiene el <strong>interés congelado</strong>: cada cuota cobra interés fijo sobre el capital
+            original ({fmt(data.monto_capital)}). Aunque el cliente abone a capital, el interés de las cuotas
+            siguientes <strong>no baja</strong> — a diferencia del resto de los créditos, donde abonar capital sí
+            reduce el interés recalculado.
+          </span>
+        </div>
+      )}
+
       {/* Encabezado */}
       <div className="bg-white rounded-xl border p-6">
 
@@ -673,6 +686,11 @@ export default function DetallePrestamo() {
               </td>
               <td className="px-4 py-3 text-right text-blue-700">
                 {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0)}
+                {saldoCapitalPendiente > 0.5 && (
+                  <p className="text-xs font-bold text-amber-600 normal-case mt-1 text-right whitespace-nowrap">
+                    {fmt(saldoCapitalPendiente)} pendiente
+                  </p>
+                )}
               </td>
               <td className="px-4 py-3 text-right text-orange-600">
                 {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0) || 0)}
