@@ -686,11 +686,6 @@ export default function DetallePrestamo() {
               </td>
               <td className="px-4 py-3 text-right text-blue-700">
                 {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0)}
-                {saldoCapitalPendiente > 0.5 && (
-                  <p className="text-xs font-bold text-amber-600 normal-case mt-1 text-right whitespace-nowrap">
-                    {fmt(saldoCapitalPendiente)} pendiente
-                  </p>
-                )}
               </td>
               <td className="px-4 py-3 text-right text-orange-600">
                 {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0) || 0)}
@@ -709,6 +704,23 @@ export default function DetallePrestamo() {
             </tr>
           </tfoot>
         </table>
+
+        {/* Nota: el total de la columna Capital ($500.000 ej.) es el capital DEL
+            CRÉDITO COMPLETO (lo que ya se pagó + lo que falta) — no es lo que falta
+            por cobrar. Aclarar aparte cuánto capital falta evita que el usuario
+            confunda ambos números al mirar la tabla. */}
+        {data.interes_fijo && saldoCapitalPendiente > 0.5 && (
+          <div className="px-6 py-4 bg-cyan-50 border-t border-cyan-200 text-sm text-cyan-800 flex items-start gap-2.5">
+            <span className="text-lg leading-none">❄️</span>
+            <p>
+              <strong>Este crédito tiene el interés congelado</strong>: el interés de cada cuota se calcula siempre
+              sobre el capital original ({fmt(data.monto_capital)}) y no baja aunque se abone a capital. El total de
+              la columna "Capital" de la tabla ({fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0)}) es el
+              capital de <em>todo</em> el crédito (pagado + pendiente) — lo que realmente falta por cobrar de capital
+              es <strong>{fmt(saldoCapitalPendiente)}</strong>.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Historial de pagos */}
