@@ -65,7 +65,7 @@ export async function POST(request) {
       valor_comercial_bien, fecha_limite_rescate, notas,
       es_refinanciacion_de,
       metodo_desembolso, entidad_desembolso, referencia_desembolso,
-      es_prestamo_interno, empresa_id,
+      es_prestamo_interno, empresa_id, interes_fijo,
     } = body
 
     // Para préstamos internos (empresa propia) no se requiere cliente_id
@@ -147,6 +147,15 @@ export async function POST(request) {
     const tasaSegura      = tipo === 'congelacion' ? 0 : (tasa_interes || 0)
     const conInteresSeguro = tipo === 'congelacion' ? false : (con_interes !== false)
 
+    // Interés fijo (congelar intereses, opt-in): solo tiene sentido en método
+    // 'plano' — el francés ya tiene cronograma fijo que nunca se redistribuye,
+    // y congelación nunca cobra interés (tasa 0). Fuera de esos casos se
+    // fuerza a false para no dejar el flag en un estado incoherente.
+    const metodoCalculoSeguro = metodo_calculo || 'plano'
+    const interesFijoSeguro = (tipo === 'congelacion' || metodoCalculoSeguro !== 'plano')
+      ? false
+      : interes_fijo === true
+
     // ── TRANSACCIÓN: consecutivo + producto + refinanciación + cuotas +
     //    caja + historial. Todo o nada: si la generación de cuotas o el
     //    desembolso fallan, no queda un producto sin plan de pagos ni un
@@ -166,16 +175,16 @@ export async function POST(request) {
           frecuencia_cobro,num_cuotas,fecha_primer_pago,con_interes,
           metodo_calculo,cuota_inicial,descripcion_bien,
           valor_comercial_bien,fecha_limite_rescate,notas,es_refinanciacion_de,
-          metodo_desembolso,entidad_desembolso,referencia_desembolso
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
+          metodo_desembolso,entidad_desembolso,referencia_desembolso,interes_fijo
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
         [id, referencia, cliente_id, tipo, capitalFinanciar,
          tasaSegura, periodo_tasa||'mensual',
          frecuencia_cobro||'mensual', num_cuotas, fecha_primer_pago,
-         conInteresSeguro, metodo_calculo||'plano',
+         conInteresSeguro, metodoCalculoSeguro,
          cuota_inicial||0, descripcion_bien||null,
          valor_comercial_bien||null, fecha_limite_rescate||null, notas||null,
          es_refinanciacion_de||null,
-         medioDesemb, entidadDesemb, refDesemb]
+         medioDesemb, entidadDesemb, refDesemb, interesFijoSeguro]
       )
 
       if (es_refinanciacion_de) {

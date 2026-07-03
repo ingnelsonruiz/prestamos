@@ -150,7 +150,8 @@ const init = {
   periodo_tasa:'mensual', frecuencia_cobro:'mensual', num_cuotas:'4',
   fecha_primer_pago:'', con_interes:true, metodo_calculo:'plano',
   cuota_inicial:'0', descripcion_bien:'', valor_comercial_bien:'', notas:'',
-  metodo_desembolso:'efectivo', entidad_desembolso:'', referencia_desembolso:''
+  metodo_desembolso:'efectivo', entidad_desembolso:'', referencia_desembolso:'',
+  interes_fijo:false,
 }
 
 // Medios de entrega del dinero + configuración de campos por medio
@@ -480,6 +481,27 @@ function NuevoPrestamoContenido() {
                   </div>
                 </div>
               </>
+            )}
+
+            {/* Congelar intereses — solo tiene sentido en método plano (el francés
+                ya tiene cuota fija que nunca se redistribuye tras un pago) */}
+            {!esCuentaAbierta && !esCongelacion && form.metodo_calculo === 'plano' && (
+              <div className="col-span-2">
+                <label className="flex items-start gap-2.5 border rounded-lg px-3 py-2.5 cursor-pointer hover:bg-cyan-50/50 transition-colors">
+                  <input type="checkbox" className="mt-0.5 w-4 h-4 accent-cyan-600"
+                    checked={form.interes_fijo} onChange={e=>set('interes_fijo', e.target.checked)} />
+                  <span>
+                    <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                      ❄️ Congelar intereses
+                    </span>
+                    <span className="text-xs text-gray-500 block mt-0.5">
+                      El interés de cada cuota queda fijo sobre el capital inicial ({fmt(parseFloat(form.monto_capital)||0)}).
+                      Si el cliente abona a capital, el interés que se cobra NO baja (a diferencia del comportamiento
+                      normal, donde abonar capital reduce el interés de las cuotas siguientes).
+                    </span>
+                  </span>
+                </label>
+              </div>
             )}
 
             {/* Cuotas, frecuencia, fecha — solo no cuenta_abierta */}

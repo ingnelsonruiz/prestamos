@@ -10,7 +10,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
   // Paralelo: las 4 queries iniciales al mismo tiempo
   const [prodRes, capRes, pendRes, totalCuotasRes] = await Promise.all([
     query(
-      `SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo
+      `SELECT monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro, metodo_calculo, interes_fijo
        FROM ${S}.cred_productos WHERE id = $1`, [productoId]
     ),
     query(
@@ -53,6 +53,12 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
   const cpmD    = CUOTAS_POR_MES[prod.frecuencia_cobro] || 1
   const tasaPer = (parseFloat(prod.tasa_interes) / 100) * cpmO / cpmD
 
+  // Interés fijo (congelado, opt-in — ver 19_interes_fijo.sql): el interés de
+  // cada período se calcula sobre el CAPITAL ORIGINAL, no sobre el saldo que
+  // va bajando con cada abono. Default (interes_fijo=false): comportamiento
+  // histórico sin cambios — interés decreciente sobre saldoCapital.
+  const baseInteres = prod.interes_fijo ? parseFloat(prod.monto_capital) : saldoCapital
+
   const capitalAbonado      = snapshotInfo?.capitalAbonado || 0
   const debeSnapshot        = capitalAbonado > 0.5 && snapshotInfo
   const antesN              = pending.length
@@ -80,7 +86,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
   while (true) {
     n = pending.length
     if (n === 0) return
-    interesTotal = Math.round(saldoCapital * tasaPer * n)
+    interesTotal = Math.round(baseInteres * tasaPer * n)
     totalAPagar  = saldoCapital + interesTotal
     cuotaBase    = Math.floor(totalAPagar / n)
     cuotaResiduo = totalAPagar - cuotaBase * n
@@ -148,7 +154,7 @@ async function recalcularCuotasPlano(productoId, snapshotInfo = null) {
     // para que el flujo dispare la refinanciación. No se inventa interés de
     // períodos futuros: solo se exige el interés del período aún no cubierto.
     if (isLast && pending.length === 1 && saldoCapital > 0.5) {
-      const periodInt    = Math.round(saldoCapital * tasaPer)
+      const periodInt    = Math.round(baseInteres * tasaPer)
       const intYaPagado  = Math.min(yaPagado, parseFloat(c.abono_interes || 0))
       const intPendiente = Math.max(0, periodInt - intYaPagado)
       const saldoPend    = saldoCapital + intPendiente
@@ -279,10 +285,11 @@ export async function POST(request) {
     const fmtCOP = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v)
 
     // ── Método del crédito y saldos para el tope de pago ──────────────────
-    // En 'plano' el interés se recalcula sobre el saldo de capital tras cada
-    // abono, por lo que lo MÁXIMO que se debe HOY es: capital pendiente +
-    // interés del período actual. Cobrar más implicaría sobrecobrar interés
-    // de períodos futuros (que aún no se han causado).
+    // En 'plano' lo MÁXIMO que se debe HOY es: capital pendiente + interés del
+    // período actual. Cobrar más implicaría sobrecobrar interés de períodos
+    // futuros (que aún no se han causado). El interés del período actual ya
+    // viene correcto (decreciente o fijo, según cred_productos.interes_fijo)
+    // porque recalcularCuotasPlano() lo recalculó tras el último abono.
     const esPlano = (cuotaRef.metodo_calculo || 'plano') !== 'frances'
     const capitalPagadoPrevio = parseFloat(capPagadoRes.rows[0]?.capital_pagado || 0)
     const saldoCapitalPend = Math.max(0, parseFloat(cuotaRef.monto_capital || 0) - capitalPagadoPrevio)

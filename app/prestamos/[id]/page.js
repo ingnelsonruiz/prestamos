@@ -382,6 +382,12 @@ export default function DetallePrestamo() {
                 <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
                   <p className="text-xs text-gray-400">Tasa</p>
                   <p className="font-bold text-gray-800 mt-0.5">{data.tasa_interes}% {data.periodo_tasa}</p>
+                  {data.interes_fijo && (
+                    <span className="inline-block mt-1 text-[10px] font-bold bg-cyan-100 text-cyan-700 px-1.5 py-0.5 rounded-full"
+                      title="Interés fijo: no baja aunque se abone a capital">
+                      ❄️ Fijo
+                    </span>
+                  )}
                 </div>
                 <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
                   <p className="text-xs text-gray-400">Cuotas</p>
@@ -569,6 +575,12 @@ export default function DetallePrestamo() {
               <div className="bg-gray-50 rounded-lg px-3 py-2">
                 <p className="text-xs text-gray-400 mb-0.5">Tasa</p>
                 <p className="font-semibold text-gray-700">{data.tasa_interes}% {data.periodo_tasa}</p>
+                {data.interes_fijo && (
+                  <span className="inline-block mt-1 text-[10px] font-bold bg-cyan-100 text-cyan-700 px-1.5 py-0.5 rounded-full"
+                    title="Interés fijo: no baja aunque se abone a capital">
+                    ❄️ Fijo
+                  </span>
+                )}
               </div>
               <div className="bg-gray-50 rounded-lg px-3 py-2">
                 <p className="text-xs text-gray-400 mb-0.5">Método</p>

@@ -689,3 +689,41 @@ npm start
 - **Recibo PDF**: número generado, falta layout imprimible completo.
 - **Modo prueba**: desactivar antes de pasar a producción real.
 - **Tipo `venta`**: mismo flujo que préstamo; se podría diferenciar con inventario.
+
+---
+
+## 17. Interés Fijo (Congelar Intereses) — 2026-07-03
+
+Opción opt-in para créditos **nuevos** con `metodo_calculo='plano'`. Columna
+`cred_productos.interes_fijo BOOLEAN NOT NULL DEFAULT FALSE` (`19_interes_fijo.sql`).
+
+**Contexto / por qué existe:** el comportamiento por defecto de un crédito 'plano' ya
+creado es que `recalcularCuotasPlano()` (`app/api/pagos/route.js`) recalcula el interés
+de las cuotas restantes sobre el saldo de capital que va bajando con cada abono
+(interés decreciente) — esto es correcto y **no se toca** para ningún crédito existente
+(quedan con `interes_fijo=false` por default, comportamiento idéntico a antes). El
+usuario pidió una opción adicional, disponible solo al crear un crédito nuevo (en
+`/prestamos/nuevo` o `/migracion/cargue-inicial`): un interés que quede "congelado"
+sobre el capital original, de modo que abonar a capital no reduzca el interés cobrado
+cada período.
+
+**Implementación:**
+- `app/api/pagos/route.js` (`recalcularCuotasPlano`): agrega `interes_fijo` al SELECT
+  del producto y calcula `baseInteres = prod.interes_fijo ? monto_capital : saldoCapital`.
+  Esa base reemplaza a `saldoCapital` en las 2 fórmulas de interés (`interesTotal` del
+  loop principal de redistribución y `periodInt` del caso especial de última cuota con
+  capital pendiente). El resto del algoritmo (cierre de cuotas, prorrateo de capital,
+  snapshots) no cambia — solo cambia la BASE sobre la que se calcula interés.
+- `POST /api/productos` y `POST /api/migracion/cargue-inicial`: aceptan `interes_fijo`
+  del body y lo persisten, pero lo **fuerzan a `false`** si `tipo==='congelacion'`
+  (nunca cobra interés, ver §8) o si `metodo_calculo !== 'plano'` (el francés ya tiene
+  cronograma fijo que nunca se redistribuye — la opción no aplica).
+- UI: checkbox "❄️ Congelar intereses" en ambos formularios de creación, visible solo
+  cuando el método es 'plano' y no es congelación/cuenta abierta.
+- Badge "❄️ Fijo" junto a la Tasa en el detalle del crédito (`/prestamos/[id]`) cuando
+  `interes_fijo=true`, para que quede visualmente claro que ese crédito no recalcula
+  interés al abonar capital.
+
+**Alcance de la migración:** columna con `DEFAULT FALSE` — cero impacto en créditos ya
+montados, cero cambio en el cálculo del tope de pago (`maxPago` en `POST /api/pagos`,
+que ya lee `abono_interes` de la cuota, sea cual sea su base de cálculo).

@@ -84,7 +84,7 @@ const FORM_INICIAL = {
   frecuencia_cobro: 'mensual', num_cuotas: '4', metodo_calculo: 'plano',
   metodo_desembolso: 'efectivo', entidad_desembolso: '', referencia_desembolso: '',
   fecha_desembolso: '', fecha_primer_pago: '', fecha_corte: hoyLocal(),
-  descripcion_bien: '', notas: '',
+  descripcion_bien: '', notas: '', interes_fijo: false,
 }
 
 export default function CargueInicialPage() {
@@ -213,6 +213,7 @@ export default function CargueInicialPage() {
             periodo_tasa: form.periodo_tasa, frecuencia_cobro: form.frecuencia_cobro,
             num_cuotas: parseInt(form.num_cuotas), metodo_calculo: form.metodo_calculo,
             con_interes: esCongelacion ? false : parseFloat(form.tasa_interes || 0) > 0,
+            interes_fijo: (!esCongelacion && form.metodo_calculo === 'plano') ? form.interes_fijo === true : false,
             fecha_desembolso: form.fecha_desembolso,
             fecha_primer_pago: form.fecha_primer_pago || form.fecha_desembolso,
             fecha_corte: form.fecha_corte,
@@ -355,6 +356,25 @@ export default function CargueInicialPage() {
               </div>
             </div>
           </div>
+
+          {/* Congelar intereses — solo tiene sentido en método plano (el francés
+              ya tiene cuota fija que nunca se redistribuye tras un pago) */}
+          {!esCongelacion && form.metodo_calculo === 'plano' && (
+            <label className="flex items-start gap-2.5 border rounded-lg px-3 py-2.5 cursor-pointer hover:bg-cyan-50/50 transition-colors">
+              <input type="checkbox" className="mt-0.5 w-4 h-4 accent-cyan-600"
+                checked={form.interes_fijo} onChange={e => set('interes_fijo', e.target.checked)} />
+              <span>
+                <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                  ❄️ Congelar intereses
+                </span>
+                <span className="text-xs text-gray-500 block mt-0.5">
+                  El interés de cada cuota queda fijo sobre el capital inicial ({fmt(parseFloat(form.monto_capital) || 0)}).
+                  Si el cliente abona a capital de aquí en adelante, el interés que se cobra NO baja (a diferencia del
+                  comportamiento normal, donde abonar capital reduce el interés de las cuotas siguientes).
+                </span>
+              </span>
+            </label>
+          )}
 
           {esEmpeno && (
             <div>

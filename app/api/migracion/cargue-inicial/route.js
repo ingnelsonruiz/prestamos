@@ -52,6 +52,7 @@ export async function POST(request) {
       fecha_desembolso, fecha_primer_pago, fecha_corte,
       metodo_desembolso, entidad_desembolso, referencia_desembolso,
       descripcion_bien, valor_comercial_bien, fecha_limite_rescate, notas,
+      interes_fijo,
     } = producto
 
     // ── Validaciones de entrada ────────────────────────────────────────────
@@ -80,6 +81,13 @@ export async function POST(request) {
     // (defensa en profundidad, sin importar lo que envíe el cliente).
     const tasaSegura       = tipo === 'congelacion' ? 0 : (con_interes === false ? 0 : parseFloat(tasa_interes || 0))
     const conInteresSeguro = tipo === 'congelacion' ? false : (con_interes !== false)
+
+    // Interés fijo (congelar intereses, opt-in — ver 19_interes_fijo.sql y
+    // POST /api/productos): solo aplica a método 'plano'. Se fuerza a false
+    // fuera de ese caso para no dejar el flag en un estado incoherente.
+    const interesFijoSeguro = (tipo === 'congelacion' || metodo !== 'plano')
+      ? false
+      : interes_fijo === true
 
     // ── 1. Cronograma teórico (AUTORITATIVO en el servidor) ─────────────────
     const productoId = uuidv4()
@@ -210,8 +218,8 @@ export async function POST(request) {
            frecuencia_cobro, num_cuotas, fecha_primer_pago, con_interes, metodo_calculo,
            cuota_inicial, descripcion_bien, valor_comercial_bien, fecha_limite_rescate,
            estado, notas, metodo_desembolso, entidad_desembolso, referencia_desembolso,
-           fecha_creacion
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+           fecha_creacion, interes_fijo
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
         [
           productoId, referencia, cliente_id, tipo, capital,
           tasaSegura,
@@ -219,7 +227,7 @@ export async function POST(request) {
           fPrimerPago, conInteresSeguro, metodo,
           0, descripcion_bien || null, valor_comercial_bien || null, fecha_limite_rescate || null,
           estadoFinal, notas || null, medioDesemb, entidadDesemb, refDesemb,
-          tsLocal(fDesembolso),
+          tsLocal(fDesembolso), interesFijoSeguro,
         ]
       )
 

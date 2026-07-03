@@ -234,6 +234,7 @@ const SENTENCIAS = [
   `ALTER TABLE administrativo.cred_pagos     ADD COLUMN IF NOT EXISTS monto_interes         NUMERIC NOT NULL DEFAULT 0`,
   `ALTER TABLE administrativo.cred_pagos     ADD COLUMN IF NOT EXISTS monto_capital          NUMERIC NOT NULL DEFAULT 0`,
   `ALTER TABLE administrativo.cred_pagos     ADD COLUMN IF NOT EXISTS usuario_nombre         TEXT DEFAULT 'Sistema'`,
+  `ALTER TABLE administrativo.cred_productos ADD COLUMN IF NOT EXISTS interes_fijo           BOOLEAN NOT NULL DEFAULT FALSE`,
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
