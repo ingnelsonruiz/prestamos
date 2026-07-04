@@ -244,6 +244,9 @@ export default function DetallePrestamo() {
     `/prestamos/nuevo?cliente=${data.cliente_id}&capital=${Math.round(saldoCapitalPendiente)}` +
     `&refinancia=${id}&fijo=1&tasa=${data.tasa_interes}&periodo=${data.periodo_tasa}` +
     `&frecuencia=${data.frecuencia_cobro}&metodo=${data.metodo_calculo}&cuotas=${cuotasPorCerrar}`
+  // Misma refinanciación de capital congelado, pero permitiendo sumar dinero
+  // nuevo (inyección) al saldo — un solo crédito nuevo por el total.
+  const urlRefinanciarMasInyeccion = `${urlRefinanciarCapitalFijo}&inyeccion=1`
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -734,10 +737,16 @@ export default function DetallePrestamo() {
                 es <strong>{fmt(saldoCapitalPendiente)}</strong>.
               </p>
               {puedeRefinanciarCapitalFijo && (
-                <Link href={urlRefinanciarCapitalFijo}
-                  className="inline-flex items-center gap-1.5 mt-3 bg-cyan-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-cyan-700 transition-colors">
-                  ❄️ Refinanciar solo capital ({fmt(saldoCapitalPendiente)})
-                </Link>
+                <div className="flex flex-wrap gap-2 mt-3">
+                  <Link href={urlRefinanciarCapitalFijo}
+                    className="inline-flex items-center gap-1.5 bg-cyan-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-cyan-700 transition-colors">
+                    ❄️ Refinanciar solo capital ({fmt(saldoCapitalPendiente)})
+                  </Link>
+                  <Link href={urlRefinanciarMasInyeccion}
+                    className="inline-flex items-center gap-1.5 bg-teal-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-teal-700 transition-colors">
+                    💵 Refinanciar + prestar más
+                  </Link>
+                </div>
               )}
             </div>
           </div>

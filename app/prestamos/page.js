@@ -26,10 +26,18 @@ function PrestamosContent() {
   const filtroInicial = valoresFiltro.includes(searchParams.get('filtro')) ? searchParams.get('filtro') : 'activos'
   const [filtroEstado, setFiltroEstado] = useState(filtroInicial)
   const [segmento, setSegmento]         = useState('todos') // 'todos' | 'clientes' | 'empresas'
+  // Segmentador independiente (combinable con estado y segmento): solo
+  // créditos creados hoy. Compara en fecha LOCAL del navegador (no UTC),
+  // igual que el resto de la app formatea fecha_creacion para mostrarla.
+  const [soloHoy, setSoloHoy] = useState(false)
+  const hoyLocal = new Date().toLocaleDateString('en-CA')
+  const esDeHoy  = p => !!p.fecha_creacion && new Date(p.fecha_creacion).toLocaleDateString('en-CA') === hoyLocal
 
   useEffect(() => {
     fetch('/api/productos').then(r=>r.json()).then(setProductos)
   },[])
+
+  const creadosHoy = productos.filter(esDeHoy)
 
   const filtrados = productos.filter(p => {
     const q = buscar.toLowerCase()
@@ -42,7 +50,8 @@ function PrestamosContent() {
     const matchSegmento = segmento === 'todos'
       || (segmento === 'clientes'  && !p.es_prestamo_interno)
       || (segmento === 'empresas'  &&  p.es_prestamo_interno)
-    return matchBuscar && matchEstado && matchSegmento
+    const matchHoy = !soloHoy || esDeHoy(p)
+    return matchBuscar && matchEstado && matchSegmento && matchHoy
   })
 
   // KPIs rápidos por segmento
@@ -171,6 +180,16 @@ function PrestamosContent() {
               {label}
             </button>
           ))}
+          {/* Segmentador independiente: no es un estado, se combina con el de arriba */}
+          <span className="w-px bg-gray-200 flex-shrink-0 my-1" />
+          <button onClick={() => setSoloHoy(v => !v)}
+            className={`px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap flex-shrink-0 flex items-center gap-1.5
+              ${soloHoy ? 'bg-emerald-600 text-white' : 'bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}>
+            📅 Creados hoy
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${soloHoy ? 'bg-white/20' : 'bg-emerald-100'}`}>
+              {creadosHoy.length}
+            </span>
+          </button>
         </div>
       </div>
 

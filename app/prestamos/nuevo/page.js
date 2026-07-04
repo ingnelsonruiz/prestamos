@@ -186,6 +186,10 @@ function NuevoPrestamoContenido() {
   const frecuenciaPresel= searchParams.get('frecuencia') || ''
   const metodoPresel    = searchParams.get('metodo') || ''
   const cuotasPresel    = searchParams.get('cuotas') || ''
+  // Refinanciar el saldo de capital congelado Y sumarle dinero nuevo
+  // (inyección) en el mismo crédito: el capital final = saldo + inyección.
+  const inyeccionPresel = fijoPresel && searchParams.get('inyeccion') === '1'
+  const [montoInyeccion, setMontoInyeccion] = useState('0')
 
   const [form, setForm] = useState({
     ...init,
@@ -262,6 +266,21 @@ function NuevoPrestamoContenido() {
       return cambio ? next : f
     })
   }, [fijoPresel, tasaPresel, periodoPresel, frecuenciaPresel])
+
+  // Refinanciación + inyección: el capital del nuevo crédito es siempre
+  // saldo congelado (fijo, viene de la URL) + dinero nuevo que el usuario
+  // escriba. El campo Capital deja de editarse directamente; se recalcula
+  // aquí cada vez que cambia el monto de la inyección.
+  useEffect(() => {
+    if (!inyeccionPresel) return
+    const base  = parseFloat(capitalPresel) || 0
+    const iny   = parseFloat(montoInyeccion) || 0
+    const total = String(Math.round(base + iny))
+    const notaGenerada = iny > 0
+      ? `Refinanciación de saldo capital congelado (${fmt(base)}) + inyección nueva de dinero (${fmt(iny)})`
+      : `Refinanciación de saldo capital congelado (${fmt(base)})`
+    setForm(f => (f.monto_capital === total && f.notas === notaGenerada) ? f : { ...f, monto_capital: total, notas: notaGenerada })
+  }, [inyeccionPresel, capitalPresel, montoInyeccion])
 
   // Ajustar fecha según tipo: cuenta abierta → hoy, préstamo normal → hoy+1 mes
   useEffect(() => {
@@ -345,19 +364,21 @@ function NuevoPrestamoContenido() {
 
       {/* ── Hero de refinanciación: contexto completo en un vistazo ── */}
       {refinanciaId && (
-        <div className={`relative overflow-hidden rounded-2xl text-white shadow-lg animate-pop bg-gradient-to-r ${fijoPresel ? 'from-cyan-900 via-cyan-700 to-blue-600' : esCongelar ? 'from-cyan-700 via-sky-600 to-cyan-500' : 'from-violet-700 via-purple-600 to-fuchsia-600'}`}>
+        <div className={`relative overflow-hidden rounded-2xl text-white shadow-lg animate-pop bg-gradient-to-r ${inyeccionPresel ? 'from-teal-800 via-teal-600 to-emerald-500' : fijoPresel ? 'from-cyan-900 via-cyan-700 to-blue-600' : esCongelar ? 'from-cyan-700 via-sky-600 to-cyan-500' : 'from-violet-700 via-purple-600 to-fuchsia-600'}`}>
           <div className="absolute -top-12 -right-12 w-44 h-44 rounded-full bg-white/10" />
           <div className="absolute -bottom-14 left-1/3 w-32 h-32 rounded-full bg-white/10" />
           <div className="relative px-6 py-5 flex flex-wrap items-center gap-x-6 gap-y-3">
             <div className="w-12 h-12 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center text-2xl shrink-0">
-              {fijoPresel ? '🧊' : esCongelar ? '❄️' : '🔄'}
+              {inyeccionPresel ? '💵' : fijoPresel ? '🧊' : esCongelar ? '❄️' : '🔄'}
             </div>
             <div className="flex-1 min-w-[200px]">
               <p className="text-lg font-extrabold tracking-tight leading-tight">
-                {fijoPresel ? 'Refinanciación de capital congelado' : esCongelar ? 'Congelación de saldo' : 'Refinanciación de saldo'}
+                {inyeccionPresel ? 'Refinanciación + dinero nuevo' : fijoPresel ? 'Refinanciación de capital congelado' : esCongelar ? 'Congelación de saldo' : 'Refinanciación de saldo'}
               </p>
               <p className="text-white/75 text-xs mt-0.5">
-                {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — {fijoPresel
+                {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — {inyeccionPresel
+                  ? <>el <strong className="text-white">saldo de capital</strong> pendiente se suma al <strong className="text-white">dinero nuevo</strong> que definas más abajo, en un solo crédito. Tasa, periodicidad y método quedan bloqueados igual al original, y el interés sigue <strong className="text-white">congelado</strong> sobre el capital total.</>
+                  : fijoPresel
                   ? <>solo el <strong className="text-white">saldo de capital</strong> pendiente pasa al nuevo crédito. Tasa, periodicidad y método quedan bloqueados igual al original y el interés sigue <strong className="text-white">congelado</strong> — solo defines el número de cuotas y la fecha.</>
                   : esCongelar
                   ? <>la deuda total ya está pre-llenada. Se difiere <strong className="text-white">sin interés adicional</strong>: solo define cuotas y frecuencia.</>
@@ -367,7 +388,7 @@ function NuevoPrestamoContenido() {
             {capitalPresel && (
               <div className="bg-white/15 border border-white/25 rounded-xl px-4 py-2 text-center shrink-0">
                 <p className="text-[10px] uppercase tracking-widest text-white/70 font-bold">
-                  {fijoPresel ? 'Capital congelado a refinanciar' : esCongelar ? 'Saldo a congelar' : 'Capital a refinanciar'}
+                  {inyeccionPresel ? 'Saldo base a refinanciar' : fijoPresel ? 'Capital congelado a refinanciar' : esCongelar ? 'Saldo a congelar' : 'Capital a refinanciar'}
                 </p>
                 <p className="text-xl font-black">{fmt(parseFloat(capitalPresel))}</p>
               </div>
@@ -501,13 +522,40 @@ function NuevoPrestamoContenido() {
               </div>
             )}
 
-            <div className={esCuentaAbierta ? 'col-span-2' : ''}>
-              <label className="text-xs font-medium text-gray-600">
-                {esCuentaAbierta ? 'Total adeudado ($) *' : 'Capital *'}
-              </label>
-              <InputMiles required value={form.monto_capital} onChange={v=>set('monto_capital',v)}
-                placeholder="Ej: 500.000" />
-            </div>
+            {inyeccionPresel ? (
+              <div className="col-span-2 space-y-3 border border-teal-200 bg-teal-50 rounded-lg p-3">
+                <p className="text-xs font-semibold text-teal-700 flex items-center gap-1.5">
+                  💵 Refinanciación + dinero nuevo
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600">Saldo a refinanciar (congelado)</label>
+                    <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-white text-cyan-700 font-semibold select-none">
+                      {fmt(parseFloat(capitalPresel)||0)}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600">💰 Dinero nuevo a prestar</label>
+                    <InputMiles value={montoInyeccion} onChange={setMontoInyeccion} placeholder="Ej: 100.000" />
+                  </div>
+                </div>
+                <div className="flex justify-between items-center border-t border-teal-200 pt-2">
+                  <span className="text-xs font-medium text-teal-700">= Capital total del nuevo crédito</span>
+                  <span className="text-lg font-black text-teal-800">{fmt(parseFloat(form.monto_capital)||0)}</span>
+                </div>
+                <p className="text-[11px] text-teal-600">
+                  El interés (congelado) se calculará sobre este capital total, no solo sobre el saldo refinanciado.
+                </p>
+              </div>
+            ) : (
+              <div className={esCuentaAbierta ? 'col-span-2' : ''}>
+                <label className="text-xs font-medium text-gray-600">
+                  {esCuentaAbierta ? 'Total adeudado ($) *' : 'Capital *'}
+                </label>
+                <InputMiles required value={form.monto_capital} onChange={v=>set('monto_capital',v)}
+                  placeholder="Ej: 500.000" />
+              </div>
+            )}
 
             {!esCuentaAbierta && (
               <div>

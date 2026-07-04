@@ -240,7 +240,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'cuota_id y monto son obligatorios' }, { status: 400 })
 
     const cuotaRes = await query(
-      `SELECT cu.*, p.cliente_id, p.metodo_calculo, p.monto_capital FROM ${S}.cred_cuotas cu
+      `SELECT cu.*, p.cliente_id, p.metodo_calculo, p.monto_capital, p.interes_fijo FROM ${S}.cred_cuotas cu
        JOIN ${S}.cred_productos p ON p.id = cu.producto_id WHERE cu.id=$1`, [cuota_id]
     )
     if (!cuotaRes.rows.length)
@@ -291,20 +291,39 @@ export async function POST(request) {
     // viene correcto (decreciente o fijo, según cred_productos.interes_fijo)
     // porque recalcularCuotasPlano() lo recalculó tras el último abono.
     const esPlano = (cuotaRef.metodo_calculo || 'plano') !== 'frances'
+    const esCongelado = cuotaRef.interes_fijo === true
     const capitalPagadoPrevio = parseFloat(capPagadoRes.rows[0]?.capital_pagado || 0)
     const saldoCapitalPend = Math.max(0, parseFloat(cuotaRef.monto_capital || 0) - capitalPagadoPrevio)
-    const cuotaActual = cuotasPendientes[0]
-    const interesPeriodoActual = cuotaActual
-      ? Math.max(0, parseFloat(cuotaActual.abono_interes || 0)
-          - Math.min(parseFloat(cuotaActual.monto_pagado || 0), parseFloat(cuotaActual.abono_interes || 0)))
-      : 0
+    // Cuotas "prioridad" para el interés. En un crédito CONGELADO el interés
+    // nunca baja al abonar capital, y en este negocio los cobros casi siempre
+    // son "anticipados" (antes de la fecha de la tabla) — así que el límite
+    // NO puede ser "por calendario". Tampoco puede ser "toda la cartera
+    // restante": eso barrería interés de cuotas que todavía nadie está
+    // pagando. El límite correcto es la cuota que el cobrador seleccionó en
+    // pantalla (cuota_id, el botón "Abonar" de esa fila específica): se debe
+    // cobrar TODO el interés pendiente desde la cuota más antigua hasta esa
+    // (inclusive) antes de que un peso toque capital. El monto de interés es
+    // fijo, así que cobrarlo antes de la fecha de la tabla no sobre-cobra
+    // nada. En un plano normal esto no aplica: al bajar capital el interés de
+    // las cuotas siguientes se recalcula hacia abajo, así que ahí sigue
+    // bastando la regla de "solo la cuota más antigua".
+    const numeroObjetivo = Math.max(
+      parseInt(cuotaRef.numero_cuota),
+      parseInt(cuotasPendientes[0]?.numero_cuota ?? cuotaRef.numero_cuota)
+    )
+    const cuotasPrioridad = esCongelado
+      ? cuotasPendientes.filter(c => parseInt(c.numero_cuota) <= numeroObjetivo)
+      : (cuotasPendientes[0] ? [cuotasPendientes[0]] : [])
+    const interesPeriodoActual = cuotasPrioridad.reduce((s, c) =>
+      s + Math.max(0, parseFloat(c.abono_interes || 0)
+        - Math.min(parseFloat(c.monto_pagado || 0), parseFloat(c.abono_interes || 0))), 0)
 
     if (esPlano) {
       const maxPago = saldoCapitalPend + interesPeriodoActual
       if (montoNum > maxPago + 1) {
         return NextResponse.json({
           error: 'El pago (' + fmtCOP(montoNum) + ') supera lo que se debe hoy: capital pendiente ('
-            + fmtCOP(saldoCapitalPend) + ') + interés del período (' + fmtCOP(interesPeriodoActual)
+            + fmtCOP(saldoCapitalPend) + ') + interés pendiente (' + fmtCOP(interesPeriodoActual)
             + ') = ' + fmtCOP(maxPago) + '. Para saldar todo el crédito use “Recoger crédito”.'
         }, { status: 400 })
       }
@@ -322,13 +341,67 @@ export async function POST(request) {
     const cuotasAplicadas = []
     const batchUpdates = []
 
-    if (esPlano) {
-      // REGLA DE NEGOCIO (plano): en cada cobro se cobra ÚNICAMENTE el interés
-      // del período actual (el de la cuota más antigua pendiente) y TODO el
-      // excedente se abona a CAPITAL. No se cobra por adelantado el interés de
-      // cuotas futuras: al bajar el capital, recalcularCuotasPlano recomputa el
-      // interés de las cuotas restantes sobre el nuevo saldo (interés
-      // decreciente). Aplicar el interés de varias cuotas sobre-cobraría.
+    if (esPlano && esCongelado) {
+      // REGLA DE NEGOCIO (plano CONGELADO): como el interés no baja al abonar
+      // capital, un pago debe cubrir TODO el interés pendiente desde la cuota
+      // más antigua hasta la que se está cobrando (cuotasPrioridad), en
+      // orden, ANTES de que cualquier excedente vaya a capital. No importa
+      // si esas cuotas ya vencieron por calendario o son "anticipadas" (así
+      // opera este negocio): el monto de interés es fijo, así que cobrarlo
+      // antes de tiempo no sobre-cobra nada. Si no se hace así, el sistema
+      // podría reducir capital mientras queda interés ya pactado sin cobrar
+      // en una cuota posterior — ese interés nunca se pierde (se sigue
+      // exigiendo en el próximo pago), pero se cobraría fuera de orden y le
+      // daría a capital un abono que, en un crédito congelado, no reduce el
+      // interés de nada.
+      let restante = montoNum
+      for (const c of cuotasPrioridad) {
+        if (restante <= 0) break
+        const yaPagado         = parseFloat(c.monto_pagado || 0)
+        const interesPendiente = Math.max(0, parseFloat(c.abono_interes || 0)
+          - Math.min(yaPagado, parseFloat(c.abono_interes || 0)))
+        const interesAplicar   = Math.min(restante, interesPendiente)
+        if (interesAplicar <= 0) continue
+        const nuevoP  = yaPagado + interesAplicar
+        const estadoC = nuevoP >= parseFloat(c.monto_cuota) ? 'pagada' : 'parcial'
+        batchUpdates.push({ id: c.id, monto_pagado: nuevoP, estado: estadoC, monto_cuota: null, abono_capital: null })
+        cuotasAplicadas.push({ numero: c.numero_cuota, aplicado: interesAplicar, estado: estadoC })
+        restante -= interesAplicar
+      }
+      // Excedente (ya se cubrió todo el interés pendiente de la cartera):
+      // abona a capital sobre la cuota más antigua pendiente, igual que en
+      // el plano normal.
+      if (restante > 0.5 && cuotasPendientes[0]) {
+        const primera      = cuotasPendientes[0]
+        const yaEnBatch     = batchUpdates.find(b => b.id === primera.id)
+        const yaPagadoBase  = yaEnBatch ? yaEnBatch.monto_pagado : parseFloat(primera.monto_pagado || 0)
+        const nuevoP        = yaPagadoBase + restante
+        const estadoC       = nuevoP >= parseFloat(primera.monto_cuota) ? 'pagada' : 'parcial'
+        const cierreConExcedente = estadoC === 'pagada' && nuevoP > parseFloat(primera.monto_cuota)
+        const update = {
+          id: primera.id, monto_pagado: nuevoP, estado: estadoC,
+          monto_cuota:   cierreConExcedente ? nuevoP : null,
+          abono_capital: cierreConExcedente ? (nuevoP - parseFloat(primera.abono_interes || 0)) : null,
+        }
+        if (yaEnBatch) Object.assign(yaEnBatch, update)
+        else batchUpdates.push(update)
+
+        const aplicadaPrevia = cuotasAplicadas.find(a => a.numero === primera.numero_cuota)
+        if (aplicadaPrevia) { aplicadaPrevia.aplicado += restante; aplicadaPrevia.estado = estadoC }
+        else cuotasAplicadas.push({ numero: primera.numero_cuota, aplicado: restante, estado: estadoC })
+
+        capitalAbonado += restante
+      }
+    } else if (esPlano) {
+      // REGLA DE NEGOCIO (plano normal): en cada cobro se cobra ÚNICAMENTE el
+      // interés del período actual (el de la cuota más antigua pendiente) y
+      // TODO el excedente se abona a CAPITAL. No se cobra por adelantado el
+      // interés de cuotas futuras: al bajar el capital, recalcularCuotasPlano
+      // recomputa el interés de las cuotas restantes sobre el nuevo saldo
+      // (interés decreciente). Aplicar el interés de varias cuotas
+      // sobre-cobraría. (Para congelados, ver la rama de arriba: ahí el
+      // interés NO baja al abonar capital, así que sí hay que sumar el de
+      // toda la cartera pendiente antes de tocar capital.)
       const c = cuotasPendientes[0]
       if (c) {
         const yaPagado            = parseFloat(c.monto_pagado || 0)
