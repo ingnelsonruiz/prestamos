@@ -177,6 +177,15 @@ function NuevoPrestamoContenido() {
   const capitalPresel  = searchParams.get('capital') || ''
   const refinanciaId   = searchParams.get('refinancia') || ''
   const esCongelar     = searchParams.get('congelar') === '1'
+  // Refinanciar SOLO el capital pendiente de un crédito con interés congelado:
+  // tasa/periodo/frecuencia/método vienen fijos del crédito original (se
+  // bloquean en la UI) — únicamente el número de cuotas queda libre.
+  const fijoPresel      = searchParams.get('fijo') === '1'
+  const tasaPresel      = searchParams.get('tasa') || ''
+  const periodoPresel   = searchParams.get('periodo') || ''
+  const frecuenciaPresel= searchParams.get('frecuencia') || ''
+  const metodoPresel    = searchParams.get('metodo') || ''
+  const cuotasPresel    = searchParams.get('cuotas') || ''
 
   const [form, setForm] = useState({
     ...init,
@@ -184,6 +193,18 @@ function NuevoPrestamoContenido() {
     monto_capital: capitalPresel || '',
     // Congelación: difiere la deuda total sin interés nuevo
     ...(esCongelar ? { tipo:'congelacion', con_interes:false, tasa_interes:'0' } : {}),
+    // Refinanciación de capital congelado: mismas condiciones del original,
+    // interés fijo obligatorio, solo cuotas editable (prellenado con las
+    // que quedaban pendientes como sugerencia).
+    ...(fijoPresel ? {
+      tipo:             'prestamo',
+      tasa_interes:     tasaPresel || init.tasa_interes,
+      periodo_tasa:     periodoPresel || init.periodo_tasa,
+      frecuencia_cobro: frecuenciaPresel || init.frecuencia_cobro,
+      metodo_calculo:   metodoPresel || 'plano',
+      num_cuotas:       cuotasPresel || init.num_cuotas,
+      interes_fijo:     true,
+    } : {}),
   })
   const [clientes,   setClientes]   = useState([])
   const [tiposList,  setTiposList]  = useState([])
@@ -223,6 +244,24 @@ function NuevoPrestamoContenido() {
       setForm(f => ({ ...f, tasa_interes: '0', con_interes: false }))
     }
   }, [esCongelacion])
+
+  // Refinanciación de capital congelado: blindaje del lado cliente para que
+  // tipo/tasa/periodo/frecuencia/método/interes_fijo no se muevan de lo que
+  // traía el crédito original, sin importar qué otro efecto los toque.
+  useEffect(() => {
+    if (!fijoPresel) return
+    setForm(f => {
+      const next = { ...f }
+      let cambio = false
+      if (f.tipo !== 'prestamo') { next.tipo = 'prestamo'; cambio = true }
+      if (tasaPresel && f.tasa_interes !== tasaPresel) { next.tasa_interes = tasaPresel; cambio = true }
+      if (periodoPresel && f.periodo_tasa !== periodoPresel) { next.periodo_tasa = periodoPresel; cambio = true }
+      if (frecuenciaPresel && f.frecuencia_cobro !== frecuenciaPresel) { next.frecuencia_cobro = frecuenciaPresel; cambio = true }
+      if (f.metodo_calculo !== 'plano') { next.metodo_calculo = 'plano'; cambio = true }
+      if (f.interes_fijo !== true) { next.interes_fijo = true; cambio = true }
+      return cambio ? next : f
+    })
+  }, [fijoPresel, tasaPresel, periodoPresel, frecuenciaPresel])
 
   // Ajustar fecha según tipo: cuenta abierta → hoy, préstamo normal → hoy+1 mes
   useEffect(() => {
@@ -306,26 +345,30 @@ function NuevoPrestamoContenido() {
 
       {/* ── Hero de refinanciación: contexto completo en un vistazo ── */}
       {refinanciaId && (
-        <div className={`relative overflow-hidden rounded-2xl text-white shadow-lg animate-pop bg-gradient-to-r ${esCongelar ? 'from-cyan-700 via-sky-600 to-cyan-500' : 'from-violet-700 via-purple-600 to-fuchsia-600'}`}>
+        <div className={`relative overflow-hidden rounded-2xl text-white shadow-lg animate-pop bg-gradient-to-r ${fijoPresel ? 'from-cyan-900 via-cyan-700 to-blue-600' : esCongelar ? 'from-cyan-700 via-sky-600 to-cyan-500' : 'from-violet-700 via-purple-600 to-fuchsia-600'}`}>
           <div className="absolute -top-12 -right-12 w-44 h-44 rounded-full bg-white/10" />
           <div className="absolute -bottom-14 left-1/3 w-32 h-32 rounded-full bg-white/10" />
           <div className="relative px-6 py-5 flex flex-wrap items-center gap-x-6 gap-y-3">
             <div className="w-12 h-12 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center text-2xl shrink-0">
-              {esCongelar ? '❄️' : '🔄'}
+              {fijoPresel ? '🧊' : esCongelar ? '❄️' : '🔄'}
             </div>
             <div className="flex-1 min-w-[200px]">
               <p className="text-lg font-extrabold tracking-tight leading-tight">
-                {esCongelar ? 'Congelación de saldo' : 'Refinanciación de saldo'}
+                {fijoPresel ? 'Refinanciación de capital congelado' : esCongelar ? 'Congelación de saldo' : 'Refinanciación de saldo'}
               </p>
               <p className="text-white/75 text-xs mt-0.5">
-                {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — {esCongelar
+                {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — {fijoPresel
+                  ? <>solo el <strong className="text-white">saldo de capital</strong> pendiente pasa al nuevo crédito. Tasa, periodicidad y método quedan bloqueados igual al original y el interés sigue <strong className="text-white">congelado</strong> — solo defines el número de cuotas y la fecha.</>
+                  : esCongelar
                   ? <>la deuda total ya está pre-llenada. Se difiere <strong className="text-white">sin interés adicional</strong>: solo define cuotas y frecuencia.</>
                   : <>el capital pendiente ya está pre-llenado. Ajusta tasa, cuotas y fecha, y confirma.</>}
               </p>
             </div>
             {capitalPresel && (
               <div className="bg-white/15 border border-white/25 rounded-xl px-4 py-2 text-center shrink-0">
-                <p className="text-[10px] uppercase tracking-widest text-white/70 font-bold">{esCongelar ? 'Saldo a congelar' : 'Capital a refinanciar'}</p>
+                <p className="text-[10px] uppercase tracking-widest text-white/70 font-bold">
+                  {fijoPresel ? 'Capital congelado a refinanciar' : esCongelar ? 'Saldo a congelar' : 'Capital a refinanciar'}
+                </p>
                 <p className="text-xl font-black">{fmt(parseFloat(capitalPresel))}</p>
               </div>
             )}
@@ -343,7 +386,7 @@ function NuevoPrestamoContenido() {
             <span className="text-white/40">━━</span>
             <span className="flex items-center gap-1.5 text-white">
               <span className="w-4 h-4 rounded-full bg-white text-purple-700 flex items-center justify-center text-[9px] font-black">2</span>
-              {esCongelar ? 'Cuotas sin interés' : 'Nuevas condiciones'}
+              {fijoPresel ? 'Cuotas del nuevo capital' : esCongelar ? 'Cuotas sin interés' : 'Nuevas condiciones'}
             </span>
             <span className="text-white/40">━━</span>
             <span className="flex items-center gap-1.5 text-white/60">
@@ -420,6 +463,13 @@ function NuevoPrestamoContenido() {
                   ❄️ Congelación
                 </div>
               </div>
+            ) : fijoPresel ? (
+              <div>
+                <label className="text-xs font-medium text-gray-600">Tipo</label>
+                <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
+                  🧊 Préstamo (capital congelado)
+                </div>
+              </div>
             ) : (
               <div>
                 <label className="text-xs font-medium text-gray-600">Tipo</label>
@@ -437,11 +487,17 @@ function NuevoPrestamoContenido() {
             {!esCuentaAbierta && (
               <div>
                 <label className="text-xs font-medium text-gray-600">Método</label>
-                <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
-                  value={form.metodo_calculo} onChange={e=>set('metodo_calculo',e.target.value)}>
-                  <option value="plano">Interés plano</option>
-                  <option value="frances">Sistema francés</option>
-                </select>
+                {fijoPresel ? (
+                  <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
+                    🧊 Interés plano (igual al original)
+                  </div>
+                ) : (
+                  <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    value={form.metodo_calculo} onChange={e=>set('metodo_calculo',e.target.value)}>
+                    <option value="plano">Interés plano</option>
+                    <option value="frances">Sistema francés</option>
+                  </select>
+                )}
               </div>
             )}
 
@@ -469,6 +525,10 @@ function NuevoPrestamoContenido() {
                     <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
                       0% — sin interés ❄️
                     </div>
+                  ) : fijoPresel ? (
+                    <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none">
+                      {form.tasa_interes}% 🧊 (igual al original)
+                    </div>
                   ) : (
                     <input type="number" step="0.01" min="0" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                       value={form.tasa_interes} onChange={e=>set('tasa_interes',e.target.value)} />
@@ -476,8 +536,8 @@ function NuevoPrestamoContenido() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Período tasa</label>
-                  <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500 select-none">
-                    Mensual
+                  <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500 select-none capitalize">
+                    {fijoPresel ? form.periodo_tasa : 'Mensual'}
                   </div>
                 </div>
               </>
@@ -487,20 +547,37 @@ function NuevoPrestamoContenido() {
                 ya tiene cuota fija que nunca se redistribuye tras un pago) */}
             {!esCuentaAbierta && !esCongelacion && form.metodo_calculo === 'plano' && (
               <div className="col-span-2">
-                <label className="flex items-start gap-2.5 border rounded-lg px-3 py-2.5 cursor-pointer hover:bg-cyan-50/50 transition-colors">
-                  <input type="checkbox" className="mt-0.5 w-4 h-4 accent-cyan-600"
-                    checked={form.interes_fijo} onChange={e=>set('interes_fijo', e.target.checked)} />
-                  <span>
-                    <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
-                      ❄️ Congelar intereses
+                {fijoPresel ? (
+                  <div className="flex items-start gap-2.5 border border-cyan-300 rounded-lg px-3 py-2.5 bg-cyan-50">
+                    <input type="checkbox" checked disabled className="mt-0.5 w-4 h-4 accent-cyan-600" />
+                    <span>
+                      <span className="text-sm font-medium text-cyan-800 flex items-center gap-1.5">
+                        🧊 Congelar intereses (obligatorio en esta refinanciación)
+                      </span>
+                      <span className="text-xs text-cyan-600 block mt-0.5">
+                        Este crédito nace de refinanciar solo el capital de un crédito ya congelado — debe seguir
+                        congelado para preservar la condición original. El interés de cada cuota queda fijo sobre el
+                        nuevo capital ({fmt(parseFloat(form.monto_capital)||0)}) y no bajará aunque el cliente abone
+                        a capital.
+                      </span>
                     </span>
-                    <span className="text-xs text-gray-500 block mt-0.5">
-                      El interés de cada cuota queda fijo sobre el capital inicial ({fmt(parseFloat(form.monto_capital)||0)}).
-                      Si el cliente abona a capital, el interés que se cobra NO baja (a diferencia del comportamiento
-                      normal, donde abonar capital reduce el interés de las cuotas siguientes).
+                  </div>
+                ) : (
+                  <label className="flex items-start gap-2.5 border rounded-lg px-3 py-2.5 cursor-pointer hover:bg-cyan-50/50 transition-colors">
+                    <input type="checkbox" className="mt-0.5 w-4 h-4 accent-cyan-600"
+                      checked={form.interes_fijo} onChange={e=>set('interes_fijo', e.target.checked)} />
+                    <span>
+                      <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                        ❄️ Congelar intereses
+                      </span>
+                      <span className="text-xs text-gray-500 block mt-0.5">
+                        El interés de cada cuota queda fijo sobre el capital inicial ({fmt(parseFloat(form.monto_capital)||0)}).
+                        Si el cliente abona a capital, el interés que se cobra NO baja (a diferencia del comportamiento
+                        normal, donde abonar capital reduce el interés de las cuotas siguientes).
+                      </span>
                     </span>
-                  </span>
-                </label>
+                  </label>
+                )}
               </div>
             )}
 
@@ -514,11 +591,17 @@ function NuevoPrestamoContenido() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600">Frecuencia cobro</label>
-                  <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
-                    value={form.frecuencia_cobro} onChange={e=>set('frecuencia_cobro',e.target.value)}>
-                    {['diario','semanal','quincenal','mensual'].map(p=>
-                      <option key={p} value={p}>{p}</option>)}
-                  </select>
+                  {fijoPresel ? (
+                    <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-cyan-50 text-cyan-700 font-medium select-none capitalize">
+                      {form.frecuencia_cobro} 🧊
+                    </div>
+                  ) : (
+                    <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                      value={form.frecuencia_cobro} onChange={e=>set('frecuencia_cobro',e.target.value)}>
+                      {['diario','semanal','quincenal','mensual'].map(p=>
+                        <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  )}
                 </div>
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-gray-600">Fecha primer pago *</label>

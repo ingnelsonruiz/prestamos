@@ -232,6 +232,19 @@ export default function DetallePrestamo() {
   const urlRefinanciar = `/prestamos/nuevo?cliente=${data.cliente_id}&capital=${saldoPendiente}&refinancia=${id}`
   const urlCongelar    = `/prestamos/nuevo?cliente=${data.cliente_id}&capital=${saldoPendiente}&refinancia=${id}&congelar=1`
 
+  // Refinanciar SOLO el capital pendiente de un crédito con interés congelado
+  // (interes_fijo=true): el interés se recalcula sobre el capital nuevo (más
+  // bajo) en vez del capital original, manteniendo el mismo congelamiento.
+  // Tasa/periodo/frecuencia/método viajan en la URL para prellenar y bloquear
+  // esas condiciones en /prestamos/nuevo — solo el número de cuotas es libre.
+  const cuotasPorCerrar = data.cuotas?.filter(c => c.estado !== 'pagada').length || 0
+  const puedeRefinanciarCapitalFijo = data.interes_fijo && saldoCapitalPendiente > 0.5
+    && !['saldado','refinanciado'].includes(data.estado)
+  const urlRefinanciarCapitalFijo =
+    `/prestamos/nuevo?cliente=${data.cliente_id}&capital=${Math.round(saldoCapitalPendiente)}` +
+    `&refinancia=${id}&fijo=1&tasa=${data.tasa_interes}&periodo=${data.periodo_tasa}` +
+    `&frecuencia=${data.frecuencia_cobro}&metodo=${data.metodo_calculo}&cuotas=${cuotasPorCerrar}`
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center justify-between">
@@ -712,13 +725,21 @@ export default function DetallePrestamo() {
         {data.interes_fijo && saldoCapitalPendiente > 0.5 && (
           <div className="px-6 py-4 bg-cyan-50 border-t border-cyan-200 text-sm text-cyan-800 flex items-start gap-2.5">
             <span className="text-lg leading-none">❄️</span>
-            <p>
-              <strong>Este crédito tiene el interés congelado</strong>: el interés de cada cuota se calcula siempre
-              sobre el capital original ({fmt(data.monto_capital)}) y no baja aunque se abone a capital. El total de
-              la columna "Capital" de la tabla ({fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0)}) es el
-              capital de <em>todo</em> el crédito (pagado + pendiente) — lo que realmente falta por cobrar de capital
-              es <strong>{fmt(saldoCapitalPendiente)}</strong>.
-            </p>
+            <div className="flex-1">
+              <p>
+                <strong>Este crédito tiene el interés congelado</strong>: el interés de cada cuota se calcula siempre
+                sobre el capital original ({fmt(data.monto_capital)}) y no baja aunque se abone a capital. El total de
+                la columna "Capital" de la tabla ({fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0)}) es el
+                capital de <em>todo</em> el crédito (pagado + pendiente) — lo que realmente falta por cobrar de capital
+                es <strong>{fmt(saldoCapitalPendiente)}</strong>.
+              </p>
+              {puedeRefinanciarCapitalFijo && (
+                <Link href={urlRefinanciarCapitalFijo}
+                  className="inline-flex items-center gap-1.5 mt-3 bg-cyan-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-cyan-700 transition-colors">
+                  ❄️ Refinanciar solo capital ({fmt(saldoCapitalPendiente)})
+                </Link>
+              )}
+            </div>
           </div>
         )}
       </div>
