@@ -58,6 +58,10 @@ export async function POST(request) {
       request.json(),
       getUsuarioDesdeRequest(request),
     ])
+    // Guardia: "credito_libre" se gestiona exclusivamente desde /api/creditos-libres
+    if (body.tipo === 'credito_libre')
+      return NextResponse.json({ error: 'Los créditos sin cuotas futuras deben crearse desde el módulo "Créditos Sin Cuotas Futuras".' }, { status: 400 })
+
     const {
       cliente_id, tipo, monto_capital, tasa_interes, periodo_tasa,
       frecuencia_cobro, num_cuotas, fecha_primer_pago, con_interes,

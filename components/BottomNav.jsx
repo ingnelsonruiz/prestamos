@@ -11,8 +11,9 @@ const navPrincipal = [
 ]
 
 const navSecundario = [
-  { href: '/gastos',    label: 'Empresas',  icon: '🏢' },
-  { href: '/empenos',   label: 'Empeños',   icon: '🔒' },
+  { href: '/gastos',          label: 'Empresas',  icon: '🏢' },
+  { href: '/creditos-libres', label: 'Sin Cuotas', icon: '📅' },
+  { href: '/empenos',         label: 'Empeños',    icon: '🔒' },
   { href: '/recibos',   label: 'Recibos',   icon: '🧾' },
   { href: '/informes',  label: 'Informes',  icon: '📈' },
   { href: '/migracion', label: 'Migración', icon: '📦' },

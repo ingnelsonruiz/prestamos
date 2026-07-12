@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import * as XLSX from 'xlsx'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
@@ -8,6 +9,7 @@ const tipoIcon  = { prestamo:'💰', venta:'🛍', empeno:'🔒', fiado:'🌿', 
 const tipoLabel = { prestamo:'Préstamo', venta:'Venta crédito', empeno:'Empeño', fiado:'Fiado finca', adelanto:'Adelanto' }
 
 export default function CobrosPage() {
+  const router = useRouter()
   const [grupos, setGrupos]   = useState([])   // agrupado por producto
   const [abiertos, setAbiertos] = useState({}) // acordeón
   const [buscar, setBuscar]   = useState('')
@@ -370,7 +372,12 @@ export default function CobrosPage() {
   }
 
   // Abre el modal con la PRIMERA cuota pendiente y el total del crédito
+  // — Si es crédito libre, redirige directo al modal de abono
   const abrirModalTodo = (g) => {
+    if (g.tipo === 'credito_libre') {
+      router.push(`/creditos-libres/${g.producto_id}?abrir=1`)
+      return
+    }
     const primera = g.cuotas[0]
     if (!primera) return
     const totalG = g.cuotas.reduce((s, c) => s + pendiente(c), 0)
@@ -759,7 +766,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                                     className="bg-purple-600 text-white text-xs px-3 py-1.5 rounded-lg whitespace-nowrap flex-shrink-0 text-center">
                                     🔄 Refinanciar
                                   </a>
-                                : <button onClick={() => abrirModal(c)}
+                                : <button onClick={() => g.tipo === 'credito_libre' ? router.push(`/creditos-libres/${g.producto_id}?abrir=1`) : abrirModal(c)}
                                     className="bg-blue-600 text-white text-xs px-3 py-1.5 rounded-lg whitespace-nowrap flex-shrink-0">
                                     💳 Abonar
                                   </button>
@@ -844,7 +851,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                                     className="bg-purple-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-purple-700 whitespace-nowrap">
                                     🔄 Refinanciar crédito
                                   </a>
-                                : <button onClick={() => abrirModal(c)}
+                                : <button onClick={() => g.tipo === 'credito_libre' ? router.push(`/creditos-libres/${g.producto_id}?abrir=1`) : abrirModal(c)}
                                     className="bg-primary-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-primary-700">
                                     💳 Abonar
                                   </button>
