@@ -236,10 +236,12 @@ export default function Dashboard() {
         />
         <HeroCard
           titulo="📈 Intereses proyectados"
-          valor={fmt(capital.intereses_proyectados)}
+          valor={fmt(capital.intereses_proyectados_total ?? capital.intereses_proyectados)}
           sub={rango
-            ? `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)} · ⚠️ No incluye Cred. Sin Cuotas (sin fecha fija)`
-            : 'Por cobrar en cuotas pendientes (todos los períodos) · ⚠️ No incluye Cred. Sin Cuotas'}
+            ? capital.intereses_libres_proyectados > 0
+              ? `Normales: ${fmt(capital.intereses_proyectados)} · Sin cuotas (30/360): ${fmt(capital.intereses_libres_proyectados)}`
+              : `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)} · ⚠️ Cred. Sin Cuotas: requiere fecha Hasta`
+            : 'Por cobrar en cuotas pendientes · ⚠️ Cred. Sin Cuotas: selecciona rango de fechas para proyectar'}
           bg="bg-gradient-to-br from-emerald-600 to-emerald-500"
           onDoubleClick={abrirDetalleIntereses}
         />
@@ -554,59 +556,146 @@ export default function Dashboard() {
               <div>
                 <h3 className="text-white font-bold text-lg">Detalle de intereses proyectados</h3>
                 <p className="text-emerald-100 text-xs mt-0.5">
-                  {rango ? `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}` : 'Todos los periodos pendientes'}
+                  {rango ? `Del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}` : 'Todos los periodos pendientes'}
                 </p>
               </div>
               <button onClick={() => setModalIntereses(false)}
                 className="text-white/80 hover:text-white text-2xl leading-none font-bold px-2">x</button>
             </div>
-            <div className="overflow-y-auto flex-1 p-4">
+            <div className="overflow-y-auto flex-1 p-4 space-y-5">
               {cargandoDetalle && <div className="text-center text-gray-400 py-12">Cargando...</div>}
-              {!cargandoDetalle && detalleIntereses && detalleIntereses.length === 0 && (
-                <div className="text-center text-gray-400 py-12">Sin cuotas pendientes en el periodo</div>
-              )}
-              {!cargandoDetalle && detalleIntereses && detalleIntereses.length > 0 && (
-                <table className="w-full text-sm border-separate border-spacing-y-1">
-                  <thead>
-                    <tr className="text-xs uppercase tracking-wide text-gray-400">
-                      <th className="text-left px-3 py-2">Cliente</th>
-                      <th className="text-left px-3 py-2">Credito</th>
-                      <th className="text-center px-3 py-2">Cuotas</th>
-                      <th className="text-left px-3 py-2">Prox. vence</th>
-                      <th className="text-right px-3 py-2 text-emerald-700">Interes proyect.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detalleIntereses.map(d => (
-                      <tr key={d.producto_id} className="bg-gray-50 hover:bg-emerald-50 rounded-lg transition-colors">
-                        <td className="px-3 py-2 rounded-l-lg">
-                          <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-emerald-700 hover:underline block">{d.nombre_cliente}</a>
-                          <span className="text-[11px] text-gray-400">{d.documento}</span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <a href={'/prestamos/' + d.producto_id} className="text-blue-600 hover:underline font-mono text-xs">{d.referencia || d.producto_id.slice(0,8)}</a>
-                          <span className="block text-[11px] text-gray-400 capitalize">{d.tipo_producto} - {fmt(d.monto_capital)}</span>
-                        </td>
-                        <td className="px-3 py-2 text-center text-gray-600 font-semibold">{d.cuotas_pendientes}</td>
-                        <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
-                          {d.proxima_fecha ? new Date(d.proxima_fecha + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '-'}
-                        </td>
-                        <td className="px-3 py-2 text-right rounded-r-lg font-bold text-emerald-700">{fmt(d.interes_proyectado)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan="4" className="px-3 pt-3 text-sm font-semibold text-gray-600">
-                        Total ({detalleIntereses.length} credito{detalleIntereses.length !== 1 ? 's' : ''})
-                      </td>
-                      <td className="px-3 pt-3 text-right text-base font-black text-emerald-700">
-                        {fmt(detalleIntereses.reduce((s, d) => s + d.interes_proyectado, 0))}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              )}
+
+              {/* ── SECCIÓN 1: Créditos normales (cuotas programadas) ── */}
+              {!cargandoDetalle && detalleIntereses && (() => {
+                const normales = detalleIntereses.normales ?? detalleIntereses ?? []
+                const libres   = detalleIntereses.libres   ?? []
+                const totales  = detalleIntereses.totales  ?? null
+                return (
+                  <>
+                    {/* Resumen total si hay dos tipos */}
+                    {libres.length > 0 && totales && (
+                      <div className="grid grid-cols-3 gap-3 bg-emerald-50 rounded-xl p-3 border border-emerald-200">
+                        <div className="text-center">
+                          <p className="text-[10px] text-gray-500 uppercase tracking-wide">Créditos normales</p>
+                          <p className="text-sm font-black text-emerald-700">{fmt(totales.interes_normales)}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-[10px] text-gray-500 uppercase tracking-wide">Cred. Sin Cuotas (30/360)</p>
+                          <p className="text-sm font-black text-cyan-700">{fmt(totales.interes_libres)}</p>
+                        </div>
+                        <div className="text-center border-l border-emerald-200">
+                          <p className="text-[10px] text-gray-500 uppercase tracking-wide">Total combinado</p>
+                          <p className="text-sm font-black text-gray-800">{fmt(totales.total)}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tabla créditos normales */}
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2 px-1">
+                        📋 Créditos con cuotas programadas ({normales.length})
+                      </h4>
+                      {normales.length === 0
+                        ? <p className="text-center text-gray-400 py-6 text-sm">Sin cuotas pendientes en el periodo</p>
+                        : (
+                          <table className="w-full text-sm border-separate border-spacing-y-1">
+                            <thead>
+                              <tr className="text-xs uppercase tracking-wide text-gray-400">
+                                <th className="text-left px-3 py-2">Cliente</th>
+                                <th className="text-left px-3 py-2">Crédito</th>
+                                <th className="text-center px-3 py-2">Cuotas</th>
+                                <th className="text-left px-3 py-2">Próx. vence</th>
+                                <th className="text-right px-3 py-2 text-emerald-700">Interés</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {normales.map(d => (
+                                <tr key={d.producto_id} className="bg-gray-50 hover:bg-emerald-50 rounded-lg transition-colors">
+                                  <td className="px-3 py-2 rounded-l-lg">
+                                    <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-emerald-700 hover:underline block">{d.nombre_cliente}</a>
+                                    <span className="text-[11px] text-gray-400">{d.documento}</span>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <a href={'/prestamos/' + d.producto_id} className="text-blue-600 hover:underline font-mono text-xs">{d.referencia}</a>
+                                    <span className="block text-[11px] text-gray-400 capitalize">{d.tipo_producto} · {fmt(d.monto_capital)}</span>
+                                  </td>
+                                  <td className="px-3 py-2 text-center text-gray-600 font-semibold">{d.cuotas_pendientes}</td>
+                                  <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
+                                    {d.proxima_fecha ? new Date(d.proxima_fecha + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '-'}
+                                  </td>
+                                  <td className="px-3 py-2 text-right rounded-r-lg font-bold text-emerald-700">{fmt(d.interes_proyectado)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr>
+                                <td colSpan="4" className="px-3 pt-2 text-xs font-semibold text-gray-500">Subtotal normales</td>
+                                <td className="px-3 pt-2 text-right font-black text-emerald-700">{fmt(normales.reduce((s, d) => s + d.interes_proyectado, 0))}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        )
+                      }
+                    </div>
+
+                    {/* Tabla créditos libres */}
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2 px-1">
+                        📅 Créditos Sin Cuotas — interés 30/360
+                        {totales?.fecha_corte_libres && (
+                          <span className="ml-2 font-normal text-cyan-600 normal-case">
+                            (corte al {fmtFecha(totales.fecha_corte_libres)})
+                          </span>
+                        )}
+                      </h4>
+                      {!rango || !rango.hasta
+                        ? <p className="text-center text-gray-400 py-6 text-sm">⚠️ Selecciona una fecha Hasta en el filtro para proyectar el interés de créditos sin cuotas</p>
+                        : libres.length === 0
+                          ? <p className="text-center text-gray-400 py-6 text-sm">Sin créditos libres activos o sin interés acumulado en el período</p>
+                          : (
+                            <table className="w-full text-sm border-separate border-spacing-y-1">
+                              <thead>
+                                <tr className="text-xs uppercase tracking-wide text-gray-400">
+                                  <th className="text-left px-3 py-2">Cliente</th>
+                                  <th className="text-left px-3 py-2">Crédito</th>
+                                  <th className="text-center px-3 py-2">Capital pend.</th>
+                                  <th className="text-center px-3 py-2">Días (30/360)</th>
+                                  <th className="text-right px-3 py-2 text-cyan-700">Interés</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {libres.map(d => (
+                                  <tr key={d.producto_id} className="bg-cyan-50 hover:bg-cyan-100 rounded-lg transition-colors">
+                                    <td className="px-3 py-2 rounded-l-lg">
+                                      <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-cyan-700 hover:underline block">{d.nombre_cliente}</a>
+                                      <span className="text-[11px] text-gray-400">{d.documento}</span>
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      <a href={'/creditos-libres/' + d.producto_id} className="text-cyan-600 hover:underline font-mono text-xs">{d.referencia}</a>
+                                      <span className="block text-[11px] text-gray-400">{d.tasa_interes}% {d.periodo_tasa}</span>
+                                    </td>
+                                    <td className="px-3 py-2 text-center text-gray-600 font-semibold">{fmt(d.capital_pendiente)}</td>
+                                    <td className="px-3 py-2 text-center text-gray-500 text-xs">
+                                      {d.dias_calculados} días
+                                      <span className="block text-[10px] text-gray-400">desde {d.inicio_periodo}</span>
+                                    </td>
+                                    <td className="px-3 py-2 text-right rounded-r-lg font-bold text-cyan-700">{fmt(d.interes_proyectado)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr>
+                                  <td colSpan="4" className="px-3 pt-2 text-xs font-semibold text-gray-500">Subtotal Sin Cuotas</td>
+                                  <td className="px-3 pt-2 text-right font-black text-cyan-700">{fmt(libres.reduce((s, d) => s + d.interes_proyectado, 0))}</td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          )
+                      }
+                    </div>
+                  </>
+                )
+              })()}
             </div>
           </div>
         </div>

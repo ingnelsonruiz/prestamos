@@ -16,6 +16,21 @@ const fechaStr = (v) => {
   return v
 }
 
+// Convención 30/360 (igual que en /api/creditos-libres)
+const DIAS_BASE_CL = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
+function diasD360(ini, fin) {
+  const [y1, m1, d1] = ini.slice(0, 10).split('-').map(Number)
+  const [y2, m2, d2] = fin.slice(0, 10).split('-').map(Number)
+  return (y2 - y1) * 360 + (m2 - m1) * 30 + (d2 - d1)
+}
+function calcInteresCL(capitalPendiente, tasa, periodTasa, inicioStr, hastaStr) {
+  if (capitalPendiente <= 0 || !inicioStr || !hastaStr) return 0
+  const dias = diasD360(inicioStr, hastaStr)
+  if (dias <= 0) return 0
+  const diasBase = DIAS_BASE_CL[periodTasa] || 30
+  return capitalPendiente * (tasa / 100 / diasBase) * dias
+}
+
 export async function GET(request) {
   try {
     const hoy = new Date().toISOString().split('T')[0]
@@ -47,6 +62,7 @@ export async function GET(request) {
       kpisGlobales,
       creditosLibresCapital,
       creditosLibresIntereses,
+      creditosLibresDetalle,
     ] = await Promise.all([
 
       // 1. Capital y conteo por estado — mora detectada por fechas (no por campo estado)
@@ -329,6 +345,37 @@ export async function GET(request) {
         WHERE p.tipo = 'credito_libre'
           AND pg.monto_interes > 0
       `, [hoy, desde, hasta]),
+
+      // 17. Detalle por crédito libre para cálculo 30/360 de interés proyectado.
+      //     Se usa cuando hay fecha "hasta" seleccionada.
+      //     inicio_periodo = último fecha_corte_interes registrado, o fecha_primer_pago si no hay cortes.
+      query(`
+        SELECT
+          p.id,
+          p.referencia,
+          p.tasa_interes,
+          p.periodo_tasa,
+          c.nombre            AS nombre_cliente,
+          c.id                AS cliente_id,
+          (p.monto_capital - COALESCE(cap.capital_pagado, 0)) AS capital_pendiente,
+          COALESCE(
+            MAX(pg.fecha_corte_interes)::text,
+            p.fecha_primer_pago::text
+          ) AS inicio_periodo
+        FROM ${S}.cred_productos p
+        LEFT JOIN ${S}.cred_clientes c ON c.id = p.cliente_id
+        LEFT JOIN (
+          SELECT producto_id, SUM(monto_capital) AS capital_pagado
+          FROM ${S}.cred_pagos WHERE monto_capital > 0 GROUP BY producto_id
+        ) cap ON cap.producto_id = p.id
+        LEFT JOIN ${S}.cred_pagos pg
+          ON pg.producto_id = p.id AND pg.fecha_corte_interes IS NOT NULL
+        WHERE p.tipo = 'credito_libre'
+          AND p.estado NOT IN ('saldado','refinanciado','decomisado')
+        GROUP BY p.id, p.referencia, p.tasa_interes, p.periodo_tasa,
+                 c.nombre, c.id, p.monto_capital, cap.capital_pagado, p.fecha_primer_pago
+        ORDER BY nombre_cliente
+      `),
     ])
 
     const ce = carteraEstados.rows[0]
@@ -339,6 +386,36 @@ export async function GET(request) {
     const cv = carteraVencida.rows[0]
     const cl = creditosLibresCapital.rows[0]
     const il = creditosLibresIntereses.rows[0]
+
+    // Calcular interés proyectado de créditos libres usando 30/360
+    // Solo tiene sentido si hay fecha "hasta" seleccionada.
+    let interesesLibresProyectados = 0
+    const detalleLibresProyectados = []
+    if (hasta) {
+      for (const row of creditosLibresDetalle.rows) {
+        const capital = parseFloat(row.capital_pendiente)
+        const interes = calcInteresCL(
+          capital,
+          parseFloat(row.tasa_interes),
+          row.periodo_tasa,
+          row.inicio_periodo,
+          hasta
+        )
+        interesesLibresProyectados += interes
+        detalleLibresProyectados.push({
+          producto_id:    row.id,
+          referencia:     row.referencia,
+          nombre_cliente: row.nombre_cliente,
+          cliente_id:     row.cliente_id,
+          capital_pendiente: capital,
+          tasa_interes:   parseFloat(row.tasa_interes),
+          periodo_tasa:   row.periodo_tasa,
+          inicio_periodo: row.inicio_periodo,
+          fecha_corte:    hasta,
+          interes_proyectado: interes,
+        })
+      }
+    }
 
     return NextResponse.json({
       cartera: {
@@ -386,13 +463,19 @@ export async function GET(request) {
         total:         parseFloat(cv.total),
       },
       capital: {
-        // Capital en la calle: créditos normales (abono_capital pendiente en cuotas)
-        //   + créditos libres (monto_capital − pagos_capital, sin cuotas futuras)
+        // Capital en la calle: créditos normales + créditos libres
         en_calle:              parseFloat(capitalCalle.rows[0].total) + parseFloat(cl.capital_pendiente || 0),
-        // Intereses proyectados: SOLO créditos normales con cuotas futuras.
-        // Los créditos libres se EXCLUYEN porque no tienen cuotas futuras fijas;
-        // su interés solo se conoce al elegir una fecha de corte.
+        // Intereses proyectados créditos normales (cuotas futuras)
         intereses_proyectados: parseFloat(interesesProyectados.rows[0].total),
+        // Intereses proyectados créditos libres (30/360 hasta la fecha seleccionada)
+        // Solo disponible cuando hay fecha "hasta". Sin fecha → 0 (no se puede proyectar)
+        intereses_libres_proyectados: interesesLibresProyectados,
+        // Fecha de corte usada para el cálculo (null si no hay rango seleccionado)
+        intereses_libres_fecha_corte: hasta,
+        // Total combinado para mostrar en el KPI
+        intereses_proyectados_total: parseFloat(interesesProyectados.rows[0].total) + interesesLibresProyectados,
+        // Detalle por crédito libre (para el modal de doble clic)
+        detalle_libres_proyectados: detalleLibresProyectados,
       },
       creditos_libres: {
         cantidad:          cl.cantidad,
