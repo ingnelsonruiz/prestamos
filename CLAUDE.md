@@ -10,7 +10,7 @@
 
 Aplicación full-stack para administrar la cartera crediticia de una empresa prestamista. Permite:
 
-- Registrar clientes y asociarles productos financieros (préstamos, empeños, ventas a crédito, fiados, adelantos).
+- Registrar clientes y asociarles productos financieros (préstamos, empeños, ventas a crédito, fiados, adelantos, **créditos sin cuotas futuras**).
 - Generar automáticamente el plan de cuotas según método de amortización seleccionado.
 - Registrar pagos, emitir recibos numerados consecutivamente y actualizar el saldo de caja.
 - Hacer seguimiento de mora, cartera vencida y empeños próximos a vencer.
@@ -28,6 +28,7 @@ Aplicación full-stack para administrar la cartera crediticia de una empresa pre
 - **Historial de recálculos**: snapshots del crédito en creación y en cada abono a capital (pactado vs. después del abono).
 - **Copias de seguridad**: exportar/restaurar la base completa en JSON y recrear la estructura idempotente.
 - **Despliegue en la nube** (Vercel) con proxy HTTP a PostgreSQL, además del modo local con conexión directa.
+- **Créditos Sin Cuotas Futuras**: módulo independiente para créditos donde el interés se calcula por fecha de corte (convención 30/360), con abono libre a intereses, capital o ambos. No usa cuotas periódicas ni toca `lib/calculos.js`.
 
 ---
 
@@ -79,6 +80,12 @@ Programa_Creditos/
 │   │   ├── backup/                # GET export JSON / POST restaurar
 │   │   │   ├── estructura/        # POST recrear estructura BD (idempotente)
 │   │   │   └── historial/         # GET historial de backups
+│   │   ├── creditos-libres/       # Módulo Créditos Sin Cuotas Futuras
+│   │   │   ├── route.js           # GET lista + POST crear
+│   │   │   └── [id]/
+│   │   │       ├── route.js       # GET detalle + métricas
+│   │   │       ├── calcular/      # GET proyección de interés (sin escribir BD)
+│   │   │       └── abonar/        # POST registrar abono (interés/capital/ambos)
 │   │   ├── historial/             # GET ?producto_id= snapshots+pagos+cuotas
 │   │   ├── health/                # GET healthcheck (SELECT 1)
 │   │   ├── usuarios/[id]/
@@ -94,6 +101,10 @@ Programa_Creditos/
 │   ├── migracion/                 # Migración masiva + zona desarrollo
 │   ├── configuracion/             # Gestión de tipos de préstamo
 │   ├── backup/                    # Copias de seguridad y estructura
+│   ├── creditos-libres/           # Módulo Créditos Sin Cuotas Futuras
+│   │   ├── page.js                # Lista con KPIs y filtros
+│   │   ├── nuevo/page.js          # Formulario de creación
+│   │   └── [id]/page.js           # Detalle + modal de abono
 │   ├── usuarios/
 │   ├── auditoria/
 │   └── page.js                    # Dashboard principal
@@ -112,7 +123,7 @@ Programa_Creditos/
 ├── vercel.json                    # maxDuration 60s en app/api/**
 ├── .env.local
 ├── 00_schema_completo.sql         # Estructura completa idempotente
-└── *.sql                          # Migraciones 03..15
+└── *.sql                          # Migraciones 03..20
 ```
 
 ---
@@ -141,7 +152,7 @@ Todas las tablas usan el prefijo `cred_` y el esquema `administrativo`. En el c�
 | id | TEXT PK | UUID v4 |
 | referencia | TEXT | Referencia legible `CRED-000001` (consecutivo) |
 | cliente_id | TEXT FK | |
-| tipo | TEXT | Código de `cred_tipos_prestamo` (ya **sin CHECK fijo**). Base: `prestamo`, `venta`, `empeno`, `fiado`, `adelanto` |
+| tipo | TEXT | Código de `cred_tipos_prestamo` (ya **sin CHECK fijo**). Base: `prestamo`, `venta`, `empeno`, `fiado`, `adelanto`, `credito_libre` |
 | monto_capital | NUMERIC | Capital financiado |
 | tasa_interes | NUMERIC | Tasa en % |
 | periodo_tasa | TEXT | `diario`, `semanal`, `quincenal`, `mensual`, `anual` |
@@ -198,6 +209,7 @@ Todas las tablas usan el prefijo `cred_` y el esquema `administrativo`. En el c�
 | notas | TEXT | |
 | numero_recibo | TEXT | Formato `REC-000001` |
 | usuario_nombre | TEXT | |
+| fecha_corte_interes | DATE NULL | Solo en créditos libres: fecha hasta la cual se cobró interés en ese pago. Agregada por `autoMigrar()` en los endpoints del módulo (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). |
 
 #### `cred_usuarios`
 | Campo | Tipo |
@@ -266,7 +278,8 @@ Tipos de préstamo dinámicos (reemplaza el CHECK fijo de `cred_productos.tipo`)
 | fecha_creacion | TIMESTAMP | |
 
 **5 tipos base (`es_sistema=TRUE`)**: `prestamo` 💰, `venta` 🛍️, `empeno` 🔒, `fiado` 🌿, `adelanto` ⚡.
-**Comportamientos**: `prestamo_normal` (cuotas con tasa/interés), `cuenta_abierta` (1 cuota a 2099-12-31 sin interés), `empeno` (igual que normal + campos de bien y rescate).
+**6.º tipo de sistema**: `credito_libre` 📅 (`es_sistema=TRUE`, `comportamiento='sin_cuotas_futuras'`, `orden=7`). Insertado por `autoMigrar()` en los endpoints de `/api/creditos-libres/*` — sin necesidad de correr SQL manual.
+**Comportamientos**: `prestamo_normal` (cuotas con tasa/interés), `cuenta_abierta` (1 cuota a 2099-12-31 sin interés), `empeno` (igual que normal + campos de bien y rescate), `sin_cuotas_futuras` (crédito libre — módulo propio, sin generación de cuotas futuras).
 
 #### `cred_historial_recalculos`
 Snapshots del estado del crédito en su creación y en cada abono a capital (para mostrar "pactado originalmente vs. después del abono").
@@ -402,6 +415,15 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 | POST | `/api/backup/estructura` | Recrea toda la estructura (SQL idempotente). Solo admin |
 | GET | `/api/backup/historial` | Últimos 50 backups. Devuelve `[]` si la tabla no existe |
 
+### Créditos Sin Cuotas Futuras
+| Método | Ruta | Notas |
+|--------|------|-------|
+| GET | `/api/creditos-libres` | Lista todos los `credito_libre`. Retorna `capital_pagado`, `capital_pendiente`, `intereses_pagados`, `ultima_fecha_corte`, `dias_sin_corte`. Ejecuta `autoMigrar()` en cada llamada. |
+| POST | `/api/creditos-libres` | Crea crédito libre: producto + 1 cuota placeholder (`fecha_vencimiento='2099-12-31'`) + desembolso en caja. Guarda `fecha_inicio` del usuario en `fecha_primer_pago`. |
+| GET | `/api/creditos-libres/[id]` | Detalle: producto, pagos con `fecha_corte_interes` y `fecha_desde_periodo` calculado cronológicamente. Normaliza todas las fechas a `YYYY-MM-DD`. |
+| GET | `/api/creditos-libres/[id]/calcular?fecha_corte=YYYY-MM-DD` | Proyecta interés (sin escribir BD). Usa convención 30/360. Retorna: `capital_pendiente`, `dias_transcurridos`, `tasa_diaria`, `interes_calculado`. Rechaza si `dias < 1`. |
+| POST | `/api/creditos-libres/[id]/abonar` | Registra abono. Body: `{ tipo_abono, fecha_corte, monto_interes, monto_capital, metodo_pago, notas }`. Valida que `fecha_corte > último corte`. Usa consecutivo de recibo compartido. Marca `saldado` si capital queda en 0. |
+
 ### Historial del crédito
 | Método | Ruta | Notas |
 |--------|------|-------|
@@ -526,6 +548,8 @@ Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para 
 | `16_normalizar_mora_cuotas.sql` | Normaliza cuotas guardadas como `estado='mora'` (legado del cargue inicial) → `pendiente/parcial` y recalcula estado de productos. Idempotente, no destructivo |
 | `17_check_estado_cuota.sql` | **Blindaje**: `CHECK chk_cred_cuotas_estado IN ('pendiente','parcial','pagada')` para impedir que se vuelva a persistir `'mora'`. Ejecutar después de la 16 |
 | `18_fix_cuotas_sobrepagadas.sql` | Corrige cuotas con `monto_pagado > monto_cuota` (excedente a capital): fija `monto_cuota = monto_pagado` y `abono_capital = monto_pagado − abono_interes`. Evita "saldo pendiente" negativo en el detalle. Idempotente |
+| `19_interes_fijo.sql` | Columna `cred_productos.interes_fijo BOOLEAN NOT NULL DEFAULT FALSE`. Interés congelado sobre capital original para créditos plano opt-in. |
+| `20_sin_cuotas_futuras.sql` | **Módulo Créditos Sin Cuotas Futuras**: (1) `ALTER TABLE cred_pagos ADD COLUMN IF NOT EXISTS fecha_corte_interes DATE NULL`; (2) elimina el CHECK de comportamientos en `cred_tipos_prestamo`; (3) inserta el tipo `credito_libre` (`comportamiento='sin_cuotas_futuras'`). Idempotente. **No es necesario ejecutarla manualmente** — `autoMigrar()` la ejecuta en cada llamada a los endpoints del módulo. |
 
 > **Convención de mora**: `cred_cuotas.estado` ∈ {`pendiente`,`parcial`,`pagada`}. La **mora NO es un estado almacenado**; se deriva por `fecha_vencimiento < CURRENT_DATE` en cada consulta (Cobros, dashboard, informes, listados de clientes/productos). El cargue inicial fija la mora solo a nivel de **producto** (`estado='en_mora'`), nunca en la cuota. **`cred_productos.estado` tampoco se re-evalúa después de creado** (ningún endpoint lo transiciona a `'en_mora'` salvo el cargue inicial), por lo que ningún filtro o vista debe usar `p.estado === 'en_mora'` para detectar mora real; usar siempre el conteo dinámico `cuotas_mora` que expone `GET /api/productos` (cuotas con `fecha_vencimiento < CURRENT_DATE`, `estado != 'pagada'` y `fecha_vencimiento <> '2099-12-31'`).
 >
@@ -603,6 +627,14 @@ Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para 
 - **Restaurar**: carga un JSON y reemplaza la base (sin tocar al usuario que restaura).
 - **Recrear estructura**: ejecuta el SQL idempotente de toda la estructura.
 - **Historial**: lista de exportaciones/restauraciones registradas en `cred_backups`.
+
+### Créditos Sin Cuotas Futuras (`/creditos-libres`)
+- Módulo **completamente independiente**: no importa `lib/calculos.js`, no llama `/api/pagos`, no toca `recalcularCuotasPlano`.
+- **Lista** (`/creditos-libres`): KPIs (activos, capital en calle, intereses cobrados), filtros Activos/Saldados/Todos, alerta si llevan >30 días sin corte de interés.
+- **Crear** (`/creditos-libres/nuevo`): cliente, capital, tasa%, período, método de desembolso, fecha de inicio, concepto. Sin campos de cuotas/frecuencia/método-cálculo. Campo capital con formato moneda en tiempo real.
+- **Detalle** (`/creditos-libres/[id]`): cabecera con capital/tasa/interés mensual aprox/desembolso; 4 KPIs (capital pagado, pendiente, intereses cobrados, total recaudado); barra de progreso; historial de abonos con período cubierto (`desde → hasta`); modal de abono. Si accede con `?abrir=1` (desde Cobros), el modal se abre automáticamente.
+- **Modal de abono**: selector de tipo (Intereses / Capital / Ambos), fecha de corte con cálculo automático en tiempo real (convención 30/360), monto sugerido editable, método de pago, notas.
+- **Cobros**: al hacer clic en "💰 Pagar" o "💳 Abonar" sobre un `credito_libre`, redirige a `/creditos-libres/[id]?abrir=1` en lugar de abrir el modal estándar de cuotas.
 
 ---
 
@@ -727,3 +759,55 @@ cada período.
 **Alcance de la migración:** columna con `DEFAULT FALSE` — cero impacto en créditos ya
 montados, cero cambio en el cálculo del tope de pago (`maxPago` en `POST /api/pagos`,
 que ya lee `abono_interes` de la cuota, sea cual sea su base de cálculo).
+
+---
+
+## 18. Módulo Créditos Sin Cuotas Futuras — 2026-07-12
+
+Módulo **totalmente independiente** del motor de cuotas existente. El dueño del sistema solicitó un tipo de crédito donde el interés no se liquida en cuotas futuras fijas, sino que el cobrador selecciona una "fecha de corte" y el sistema calcula lo acumulado hasta esa fecha.
+
+### Reglas de negocio
+- **Convención 30/360**: cada mes cuenta exactamente 30 días, sin importar si tiene 28, 29, 30 o 31. Fórmula: `(Y2−Y1)×360 + (M2−M1)×30 + (D2−D1)`. Esto garantiza cobros mensuales consistentes.
+- **Fórmula de interés**: `interés = capital_pendiente × (tasa/100 / diasBase) × dias30_360`, donde `diasBase = DIAS_PERIODO[periodo_tasa]` (diario=1, semanal=7, quincenal=15, mensual=30, anual=360).
+- **Tipos de abono**: `interes` (solo cobro de interés del período), `capital` (abono libre al principal), `ambos` (en un solo recibo).
+- **Fecha de corte**: siempre debe ser estrictamente posterior a la última fecha de corte registrada. No se puede cobrar interés del mismo día.
+- **Capital**: puede abonarse en cualquier momento y en cualquier monto (hasta el pendiente). Bajar el capital reduce la base de cálculo de interés en el próximo período.
+- **Saldado**: cuando `capital_pagado >= monto_capital - 0.5`, el producto pasa a `saldado`.
+- **`fecha_primer_pago`**: almacena la fecha de inicio del crédito ingresada por el usuario (no la fecha de inserción en BD). Siempre usar `fecha_primer_pago` como inicio del primer período de interés.
+
+### Auto-migración (patrón clave)
+Los 4 endpoints del módulo llaman `autoMigrar()` al inicio de cada request:
+```js
+async function autoMigrar() {
+  await query(`ALTER TABLE administrativo.cred_pagos ADD COLUMN IF NOT EXISTS fecha_corte_interes DATE NULL`)
+  await query(`ALTER TABLE administrativo.cred_tipos_prestamo DROP CONSTRAINT IF EXISTS cred_tipos_prestamo_comportamiento_check`)
+  await query(`INSERT INTO administrativo.cred_tipos_prestamo (...) VALUES ('tipo-credito-libre','credito_libre','Crédito Sin Cuotas','📅',...,'sin_cuotas_futuras',TRUE,TRUE,7) ON CONFLICT (codigo) DO NOTHING`)
+}
+```
+Esto elimina la necesidad de correr SQL manualmente. El patrón es idempotente (seguro de correr múltiples veces).
+
+### Estructura de datos
+- **Producto**: `tipo='credito_libre'`, `metodo_calculo='plano'`, `num_cuotas=1`, `con_interes=FALSE`.
+- **Cuota placeholder**: única cuota con `fecha_vencimiento='2099-12-31'`, `monto_cuota=monto_capital`. Sirve de ancla para el sistema de caja; no se usa para calcular interés.
+- **Pagos**: cada abono va a `cred_pagos` con `monto_interes` y `monto_capital` desglosados. Si el abono incluye interés, `fecha_corte_interes` registra hasta qué fecha cubre.
+- **`fecha_desde_periodo`**: campo derivado (no almacenado). Se calcula en `GET /api/creditos-libres/[id]` ordenando los pagos cronológicamente y rastreando el último `fecha_corte_interes` visto.
+
+### Navegación desde Cobros
+`app/cobros/page.js` detecta `g.tipo === 'credito_libre'` en los tres puntos de pago:
+- `abrirModalTodo(g)` → `router.push('/creditos-libres/[id]?abrir=1')`
+- Botón "💳 Abonar" móvil → igual
+- Botón "💳 Abonar" tabla desktop → igual
+
+El parámetro `?abrir=1` hace que la página de detalle inicialice `modalAbierto=true` (via `useState(searchParams.get('abrir') === '1')`), abriendo el modal de registro de abono directamente.
+
+### Bugs conocidos y fixes aplicados
+- **Fecha UTC desfasada**: `new Date("2026-05-01")` = medianoche UTC = 30 de abril en Colombia (UTC-5). Fix: siempre `new Date(str + 'T12:00:00')` antes de formatear fechas.
+- **Capital con `step`**: `<input type="number" step="1000">` genera secuencia 1, 1001... y rechaza 1.000.000. Fix: `type="text" inputMode="numeric"` con handler de formateo manual.
+- **Interés mismo día**: validación original `<` en lugar de `<=`. Fix correcto: `if (fecha_corte <= anteriorStr)` rechaza — siempre debe ser estrictamente posterior.
+- **Constraint violado**: `cred_tipos_prestamo_comportamiento_check` no incluía `sin_cuotas_futuras`. Fix: `DROP CONSTRAINT IF EXISTS` en `autoMigrar()`.
+
+### Aislamiento garantizado
+- NO modifica `lib/calculos.js`
+- NO llama a `POST /api/pagos`
+- NO toca `recalcularCuotasPlano`
+- Los créditos existentes (préstamos, fiados, empeños, etc.) no se ven afectados en ningún caso

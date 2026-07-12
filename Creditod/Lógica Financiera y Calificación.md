@@ -32,3 +32,31 @@ El score del cliente se calcula dinámicamente en el lado del cliente (Frontend)
 // Si no hay pagos registrados o no existen cuotas evaluables, retorna null (Sin historial)[cite: 1]
 score = ((pagadas * 1.0) + (parciales * 0.5)) / evaluables.length * 100;
 if (refinanciado) score -= 20; // Penalización por refinanciación[cite: 1]
+---
+
+## 📅 Motor de Créditos Sin Cuotas Futuras (2026-07-12)
+
+Motor **completamente independiente** de `lib/calculos.js`. No interactúa con el motor de amortización plana ni francesa.
+
+### Convención 30/360
+```js
+function diasD360(inicioStr, finStr) {
+  const [y1, m1, d1] = inicioStr.split('-').map(Number)
+  const [y2, m2, d2] = finStr.split('-').map(Number)
+  return (y2 - y1) * 360 + (m2 - m1) * 30 + (d2 - d1)
+}
+```
+Ejemplo: 1 mayo → 1 julio = `(0×360) + (2×30) + 0 = 60 días` (no 61 como en calendario real).
+
+### Fórmula de interés
+```
+interés = capital_pendiente × (tasa% / 100 / diasBase) × diasD360(inicio, corte)
+```
+Donde `diasBase` según `periodo_tasa`:
+- `diario` → 1, `semanal` → 7, `quincenal` → 15, `mensual` → 30, `anual` → 360
+
+### Aislamiento garantizado
+- NO modifica `lib/calculos.js`
+- NO llama `POST /api/pagos`
+- NO ejecuta `recalcularCuotasPlano`
+- Los créditos existentes (préstamos, fiados, empeños) no se ven afectados en ningún caso

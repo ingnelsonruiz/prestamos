@@ -4,8 +4,7 @@ Especificación de las herramientas y capas de software utilizadas en el desarro
 
 - **Framework**: Next.js ^15.3.3 utilizando arquitectura App Router, combinando Server Components y Client Components.
 - **Base de Datos**: PostgreSQL utilizando el esquema aislado de nombre `administrativo`.
-- **Acceso a Base de Datos**: Doble modo dinámico configurado en `lib/db.js`. Utiliza un pool de `pg` directo para desarrollo local, o un proxy HTTP (`PROXY_URL` + `PROXY_API_KEY`) optimizado para entornos Cloud con reintentos y mitigación de cold starts. **El proyecto NO usa Prisma** — cualquier sugerencia de configurar `prisma/schema.prisma` no aplica.
-- **Configuración del Pool (`lib/db.js`) — actualizada 2026-07-08**: `max:1`, `idleTimeoutMillis:10000`, `allowExitOnIdle:true`, `keepAlive` omitido. Puerto por defecto `6543` (PgBouncer Transaction). Esta configuración previene el error `EMAXCONN` en Vercel serverless donde cada ruta API instancia su propio Pool aislado (ver incidente 2026-07-08 en [[Flujos de Negocio]]).
+- **Acceso a Base de Datos**: Doble modo dinámico configurado en `lib/db.js`. Utiliza un pool de `pg` directo para desarrollo local, o un proxy HTTP (`PROXY_URL` + `PROXY_API_KEY`) optimizado para entornos Cloud con reintentos y mitigación de cold starts.
 - **Autenticación y Seguridad**: Implementación de JSON Web Tokens (JWT) mediante la librería `jose` v6. Se almacena del lado del cliente en una cookie HttpOnly llamada `itl_session` con una expiración de 8 horas.
 - **Estilos Visuales**: Tailwind CSS v3.
 - **Gráficas de Tableros**: Chart.js 4 integrado con la biblioteca adaptadora `react-chartjs-2`.

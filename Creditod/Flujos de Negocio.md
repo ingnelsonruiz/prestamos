@@ -31,23 +31,51 @@ El registro de abonos no corre bajo una transacción SQL global de base de datos
 ## 🛠️ Registro Histórico de Incidentes Críticos
 
 ### ⚠️ Incidente del 2026-07-02 — Agotamiento de Conexiones en Producción (Vercel)
-- **Síntoma**: Toda la aplicación colapsaba con el mensaje en rojo: *"Sin conexión a la base de datos"* acompañado del log `(EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15`.
-- **Causa**: La variable `DB_PORT=5432` conectaba la aplicación al pooler Supavisor de Supabase en **modo "Session"**. Bajo la arquitectura serverless de Vercel, cada invocación fría generaba pools individuales que retenían de manera exclusiva un backend de Postgres durante todo su ciclo de vida. Al concurrir peticiones paralelas del dashboard y cobros, los 15 clientes concurrentes del plan se agotaban instantáneamente.
-- **Solución Ejecutada**: Se modificó `lib/db.js` y `.env.local` para redirigir las conexiones al puerto **`6543`**, activando el **modo "Transaction"** del pooler. En este modo, PgBouncer libera la conexión de Postgres inmediatamente después de finalizar cada transacción corta. Compatible con `withTransaction()` ya que mantiene al cliente dedicado solo durante el bloque `BEGIN...COMMIT`.
-- **Acción pendiente**: Actualizar `DB_PORT=6543` en **Vercel → Settings → Environment Variables** y redesplegar.
+- **Síntoma**: Toda la aplicación colapsaba con el mensaje en rojo: *"Sin conexión a la base de datos"* acompañado del log `(EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15`[cite: 1].
+- **Causa**: La variable `DB_PORT=5432` conectaba la aplicación al pooler Supavisor de Supabase en **modo "Session"**[cite: 1]. Bajo la arquitectura serverless de Vercel, cada invocación fría generaba pools individuales que retenían de manera exclusiva un backend de Postgres durante todo su ciclo de vida[cite: 1]. Al concurrir peticiones paralelas del dashboard y cobros, los 15 clientes concurrentes del plan se agotaban instantáneamente[cite: 1].
+- **Solución Ejecutada**: Se modificó el archivo `lib/db.js` y el entorno local para redirigir las conexiones al puerto **`6543`**, activando el **modo "Transaction"** del pooler[cite: 1]. En este modo, el proxy libera la conexión de Postgres inmediatamente después de finalizar cada transacción corta, permitiendo cientos de peticiones concurrentes sobre un pool pequeño[cite: 1]. Este patrón es totalmente compatible con `withTransaction()`, ya que mantiene al cliente dedicado únicamente durante el bloque `BEGIN...COMMIT`[cite: 1].
+- **Acción de Mantenimiento**: Monitorear y asegurar que la variab
+---
 
-### ⚠️ Incidente del 2026-07-08 — EMAXCONN limit:200 en plan de pago (Supabase)
-- **Síntoma**: Login y páginas mostraban `(EMAXCONN) max client connections reached, limit: 200` incluso con un solo usuario activo, después de migrar al plan de pago de Supabase y configurar el pooler en puerto 6543.
-- **Causa raíz — arquitectura serverless mal entendida**: En Vercel, **cada ruta API corre en su propio proceso aislado** — `globalThis.__pg_pool` NO se comparte entre rutas distintas, solo entre invocaciones cálidas de la MISMA ruta. Por lo tanto, cuando el dashboard dispara 8-10 llamadas API en paralelo (`/api/dashboard`, `/api/productos`, `/api/cuotas`, etc.), se crean 8-10 pools independientes. Con la configuración anterior (`max:3`, `idleTimeoutMillis:30000`, `keepAlive:true`), las instancias "warm" de Vercel acumulaban conexiones abiertas durante 30 segundos en cada ruta, alcanzando fácilmente 200 conexiones con un único usuario navegando activamente.
-- **Solución aplicada en `lib/db.js` (2026-07-08)**:
+## 📅 Flujo de Créditos Sin Cuotas Futuras (2026-07-12)
 
-| Parámetro | Antes | Después | Razón |
-|---|---|---|---|
-| `max` | `3` | `1` | Serverless procesa 1 request por instancia; más conexiones solo se acumulan idle |
-| `idleTimeoutMillis` | `30000` | `10000` | Libera conexiones ociosas en 10s, no 30s |
-| `allowExitOnIdle` | ausente | `true` | El pool se destruye cuando no hay queries activas |
-| `keepAlive` | `true` | omitido (false) | Evita mantener conexiones TCP vivas innecesariamente |
-| Puerto por defecto | `'5432'` | `'6543'` | Seguro de falla: si DB_PORT no está en Vercel, cae a PgBouncer Transaction en vez de Session |
+Módulo **totalmente aislado** del motor de cuotas. No usa `lib/calculos.js`, no llama `POST /api/pagos`, no ejecuta `recalcularCuotasPlano`.
 
-- **Patrón a recordar**: `max:1` es correcto y seguro con PgBouncer Transaction mode. El pooler libera la conexión de servidor tras cada transacción; un `max` mayor solo genera acumulación de conexiones idle en instancias serverless warm. `withTransaction()` es compatible porque toma un cliente dedicado del pool durante `BEGIN...COMMIT` y lo libera en `finally`.
-- **Acción pendiente**: Confirmar en Vercel → Settings → Environment Variables que `DB_HOST=aws-1-us-east-2.pooler.supabase.com` y `DB_PORT=6543`, luego redesplegar sin caché.
+### Reglas de negocio
+- **Convención 30/360**: cada mes = exactamente 30 días, independientemente de cuántos días tenga el mes real. Fórmula: `(Y2−Y1)×360 + (M2−M1)×30 + (D2−D1)`. Garantiza cobros mensuales consistentes.
+- **Fórmula de interés**: `interés = capital_pendiente × (tasa/100 / diasBase) × dias30_360`, donde `diasBase` depende del `periodo_tasa` (diario=1, semanal=7, quincenal=15, mensual=30, anual=360).
+- **Tipos de abono**: `interes` (solo interés del período), `capital` (abono libre al principal), `ambos` (interés + capital en un recibo).
+- **Fecha de corte**: siempre estrictamente posterior al último corte registrado. Se rechaza si es igual o anterior.
+- **Saldado**: cuando `capital_pagado >= monto_capital - 0.5`.
+- **`fecha_primer_pago`**: es la fecha de inicio ingresada por el usuario en el formulario. Se usa como punto de partida para el primer período de interés.
+
+### Flujo de creación
+`POST /api/creditos-libres` → producto con `tipo='credito_libre'` → 1 cuota placeholder `2099-12-31` → desembolso en `cred_movimientos_caja`.
+
+### Flujo de cobro de interés
+1. Cobrador selecciona fecha de corte.
+2. `GET /api/creditos-libres/[id]/calcular?fecha_corte=YYYY-MM-DD` proyecta el interés (solo lectura).
+3. Sistema muestra monto sugerido editable.
+4. Cobrador confirma → `POST /api/creditos-libres/[id]/abonar` guarda el pago en `cred_pagos` con `fecha_corte_interes`.
+
+### Flujo de acceso desde Cobros
+`app/cobros/page.js` detecta `g.tipo === 'credito_libre'` en los tres botones de pago y ejecuta `router.push('/creditos-libres/[id]?abrir=1')`. El parámetro `?abrir=1` inicializa `modalAbierto=true` en la página de detalle, abriendo el modal de abono de forma inmediata sin pasos adicionales.
+
+### Patrón de auto-migración
+```js
+async function autoMigrar() {
+  await query(`ALTER TABLE administrativo.cred_pagos ADD COLUMN IF NOT EXISTS fecha_corte_interes DATE NULL`)
+  await query(`ALTER TABLE administrativo.cred_tipos_prestamo DROP CONSTRAINT IF EXISTS cred_tipos_prestamo_comportamiento_check`)
+  await query(`INSERT INTO administrativo.cred_tipos_prestamo (...) ON CONFLICT (codigo) DO NOTHING`)
+}
+```
+Se ejecuta al inicio de cada request en los 4 endpoints del módulo. Es idempotente — seguro de correr múltiples veces.
+
+### Bugs corregidos durante el desarrollo
+| Bug | Causa | Fix |
+|-----|-------|-----|
+| Fecha mostraba día anterior | `new Date("2026-05-01")` = medianoche UTC = abril 30 en Colombia (UTC-5) | Siempre usar `new Date(str + 'T12:00:00')` |
+| Input capital rechazaba 1.000.000 | `<input type="number" step="1000">` genera secuencia 1, 1001... | `type="text" inputMode="numeric"` con handler de formateo manual |
+| Se cobraba interés del mismo día | Validación usaba `<` en lugar de `<=` | `if (fecha_corte <= anteriorStr)` rechaza |
+| Error constraint violado al insertar tipo | CHECK no incluía `sin_cuotas_futuras` | `DROP CONSTRAINT IF EXISTS` en `autoMigrar()` |
+| Interés calculado con días reales (31 días) | No usaba convención 30/360 | Función `diasD360()` implementando 30/360 |

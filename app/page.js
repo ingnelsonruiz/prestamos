@@ -175,7 +175,7 @@ export default function Dashboard() {
   if (!data)       return <div className="text-gray-400 p-6 text-center">Cargando dashboard…</div>
   if (data.error)  return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error BD: {data.error}</div>
 
-  const { cartera, intereses, mora, recaudo, cartera_vencida, capital, cuotas_hoy, cuotas_semana, empenos_vencer, otros_rubros = [] } = data
+  const { cartera, intereses, mora, recaudo, cartera_vencida, capital, cuotas_hoy, cuotas_semana, empenos_vencer, otros_rubros = [], creditos_libres = {} } = data
 
   const roi = recaudo.total > 0
     ? ((intereses.total / (recaudo.total - intereses.total)) * 100).toFixed(1)
@@ -238,8 +238,8 @@ export default function Dashboard() {
           titulo="📈 Intereses proyectados"
           valor={fmt(capital.intereses_proyectados)}
           sub={rango
-            ? `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)}`
-            : 'Por cobrar en cuotas pendientes (todos los períodos)'}
+            ? `Cuotas pendientes del ${fmtFecha(rango.desde)} al ${fmtFecha(rango.hasta)} · ⚠️ No incluye Cred. Sin Cuotas (sin fecha fija)`
+            : 'Por cobrar en cuotas pendientes (todos los períodos) · ⚠️ No incluye Cred. Sin Cuotas'}
           bg="bg-gradient-to-br from-emerald-600 to-emerald-500"
           onDoubleClick={abrirDetalleIntereses}
         />
@@ -296,7 +296,28 @@ export default function Dashboard() {
         return (
           <div>
             <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">Otros rubros activos</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+
+              {/* Créditos Sin Cuotas — PRIMERO: capital pendiente real, intereses por corte */}
+              <div
+                className="bg-cyan-50 border border-cyan-200 rounded-xl p-4 cursor-pointer transition-transform hover:scale-[1.02] active:scale-[0.98]"
+                onDoubleClick={() => window.location.href = '/creditos-libres'}
+                title="Doble clic para ver créditos sin cuotas">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xl">📅</span>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full border bg-cyan-50 border-cyan-200 text-cyan-700">
+                    {creditos_libres.cantidad ?? 0} registro{(creditos_libres.cantidad ?? 0) !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <p className="text-[11px] uppercase tracking-wide font-semibold text-cyan-700 opacity-70">Cred. Sin Cuotas</p>
+                <p className="text-lg font-black text-cyan-700 mt-0.5">{fmt(creditos_libres.capital_pendiente ?? 0)}</p>
+                <div className="text-[10px] mt-1 text-cyan-700 opacity-50 flex justify-between">
+                  <span>Int. cobrados: {fmt(creditos_libres.intereses_cobrados ?? 0)}</span>
+                  <span>Capital pend.</span>
+                </div>
+                <p className="text-[9px] text-cyan-600 opacity-60 mt-1">⚠️ Proyección no aplica</p>
+              </div>
+
               {RUBROS.map(cfg => {
                 const r = otros_rubros.find(x => x.tipo === cfg.tipo) || { cantidad: 0, capital_total: 0, saldo_pendiente: 0 }
                 return (

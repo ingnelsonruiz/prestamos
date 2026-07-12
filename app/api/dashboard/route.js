@@ -45,6 +45,8 @@ export async function GET(request) {
       interesesRetornos,
       otrosRubros,
       kpisGlobales,
+      creditosLibresCapital,
+      creditosLibresIntereses,
     ] = await Promise.all([
 
       // 1. Capital y conteo por estado — mora detectada por fechas (no por campo estado)
@@ -268,6 +270,10 @@ export async function GET(request) {
       //     monto_capital incluye interés viejo, no es capital real desembolsado).
       //     total_invertido / num_creditos: créditos reales no refinanciados
       //     (el refinanciado original se omite para no duplicar con su sucesor).
+      //     Excluye fiado/adelanto (cuentas abiertas) y congelacion (su
+      //     monto_capital incluye interés viejo, no es capital real desembolsado).
+      //     total_invertido / num_creditos: créditos reales no refinanciados
+      //     (el refinanciado original se omite para no duplicar con su sucesor).
       query(`
         SELECT
           COALESCE(SUM(p.monto_capital) FILTER (WHERE p.estado <> 'refinanciado'), 0) AS total_invertido,
@@ -281,6 +287,48 @@ export async function GET(request) {
         FROM ${S}.cred_productos p
         WHERE p.tipo NOT IN ('fiado','adelanto','congelacion')
       `),
+
+      // 15. Capital pendiente real de Créditos Sin Cuotas Futuras (activos)
+      //     NO se puede derivar de cred_cuotas (placeholder tiene abono_capital=0),
+      //     se calcula directamente: monto_capital − suma de abonos a capital en pagos.
+      query(`
+        SELECT
+          COALESCE(SUM(
+            p.monto_capital - COALESCE(cap.capital_pagado, 0)
+          ), 0) AS capital_pendiente,
+          COUNT(*)::int AS cantidad
+        FROM ${S}.cred_productos p
+        LEFT JOIN (
+          SELECT producto_id, SUM(monto_capital) AS capital_pagado
+          FROM ${S}.cred_pagos
+          WHERE monto_capital > 0
+          GROUP BY producto_id
+        ) cap ON cap.producto_id = p.id
+        WHERE p.tipo = 'credito_libre'
+          AND p.estado NOT IN ('saldado','refinanciado','decomisado')
+      `),
+
+      // 16. Intereses ya cobrados de Créditos Sin Cuotas Futuras por período
+      //     La fórmula estándar (Query 2) da 0 para estos pagos porque usa
+      //     cu.abono_interes / cu.monto_cuota, y el placeholder tiene abono_interes=0.
+      //     Se toma directamente de cred_pagos.monto_interes.
+      query(`
+        SELECT
+          COALESCE(SUM(CASE WHEN pg.fecha_pago::date = $1
+            THEN pg.monto_interes END), 0) AS hoy,
+          COALESCE(SUM(CASE WHEN pg.fecha_pago::date >= DATE_TRUNC('week',  $1::date)
+            THEN pg.monto_interes END), 0) AS semana,
+          COALESCE(SUM(CASE WHEN pg.fecha_pago::date >= DATE_TRUNC('month', $1::date)
+            THEN pg.monto_interes END), 0) AS mes,
+          COALESCE(SUM(pg.monto_interes), 0) AS total,
+          COALESCE(SUM(CASE WHEN $2::date IS NOT NULL
+            AND pg.fecha_pago::date BETWEEN $2::date AND $3::date
+            THEN pg.monto_interes END), 0) AS rango
+        FROM ${S}.cred_pagos pg
+        JOIN ${S}.cred_productos p ON p.id = pg.producto_id
+        WHERE p.tipo = 'credito_libre'
+          AND pg.monto_interes > 0
+      `, [hoy, desde, hasta]),
     ])
 
     const ce = carteraEstados.rows[0]
@@ -289,6 +337,8 @@ export async function GET(request) {
     const mp = moraPeriodos.rows[0]
     const rp = recaudoPeriodos.rows[0]
     const cv = carteraVencida.rows[0]
+    const cl = creditosLibresCapital.rows[0]
+    const il = creditosLibresIntereses.rows[0]
 
     return NextResponse.json({
       cartera: {
@@ -302,14 +352,15 @@ export async function GET(request) {
         num_refinanciados:     ce.num_refinanciados,
       },
       intereses: {
-        hoy:    parseFloat(ip.hoy)    + parseFloat(ir.hoy    || 0),
-        semana: parseFloat(ip.semana) + parseFloat(ir.semana || 0),
-        mes:    parseFloat(ip.mes)    + parseFloat(ir.mes    || 0),
-        total:  parseFloat(ip.total)  + parseFloat(ir.total  || 0),
-        rango:  parseFloat(ip.rango)  + parseFloat(ir.rango  || 0),
+        hoy:    parseFloat(ip.hoy)    + parseFloat(ir.hoy    || 0) + parseFloat(il.hoy    || 0),
+        semana: parseFloat(ip.semana) + parseFloat(ir.semana || 0) + parseFloat(il.semana || 0),
+        mes:    parseFloat(ip.mes)    + parseFloat(ir.mes    || 0) + parseFloat(il.mes    || 0),
+        total:  parseFloat(ip.total)  + parseFloat(ir.total  || 0) + parseFloat(il.total  || 0),
+        rango:  parseFloat(ip.rango)  + parseFloat(ir.rango  || 0) + parseFloat(il.rango  || 0),
         // Desglose para trazabilidad
-        intereses_prestamos:  parseFloat(ip.total),
-        intereses_retornos:   parseFloat(ir.total || 0),
+        intereses_prestamos:      parseFloat(ip.total),
+        intereses_retornos:       parseFloat(ir.total || 0),
+        intereses_creditos_libres: parseFloat(il.total || 0),
       },
       mora: {
         clientes_total: mp.clientes_total,
@@ -335,8 +386,18 @@ export async function GET(request) {
         total:         parseFloat(cv.total),
       },
       capital: {
-        en_calle:              parseFloat(capitalCalle.rows[0].total),
+        // Capital en la calle: créditos normales (abono_capital pendiente en cuotas)
+        //   + créditos libres (monto_capital − pagos_capital, sin cuotas futuras)
+        en_calle:              parseFloat(capitalCalle.rows[0].total) + parseFloat(cl.capital_pendiente || 0),
+        // Intereses proyectados: SOLO créditos normales con cuotas futuras.
+        // Los créditos libres se EXCLUYEN porque no tienen cuotas futuras fijas;
+        // su interés solo se conoce al elegir una fecha de corte.
         intereses_proyectados: parseFloat(interesesProyectados.rows[0].total),
+      },
+      creditos_libres: {
+        cantidad:          cl.cantidad,
+        capital_pendiente: parseFloat(cl.capital_pendiente || 0),
+        intereses_cobrados: parseFloat(il.total || 0),
       },
       // KPIs históricos globales (informes). Congelación excluida del capital.
       kpis: {
