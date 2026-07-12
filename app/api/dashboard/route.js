@@ -387,18 +387,20 @@ export async function GET(request) {
     const cl = creditosLibresCapital.rows[0]
     const il = creditosLibresIntereses.rows[0]
 
-    // Calcular interés proyectado de créditos libres usando 30/360
-    // Solo tiene sentido si hay fecha "hasta" seleccionada.
+    // Calcular interés proyectado de créditos libres usando 30/360.
+    // Requiere AMBAS fechas: usa `desde` como inicio del período (no el último corte
+    // ni la fecha de desembolso) para que el cálculo refleje exactamente el rango
+    // seleccionado en el dashboard — más dinámico y controlado por el usuario.
     let interesesLibresProyectados = 0
     const detalleLibresProyectados = []
-    if (hasta) {
+    if (hayRango) {
       for (const row of creditosLibresDetalle.rows) {
         const capital = parseFloat(row.capital_pendiente)
         const interes = calcInteresCL(
           capital,
           parseFloat(row.tasa_interes),
           row.periodo_tasa,
-          row.inicio_periodo,
+          desde,   // ← fecha DESDE del selector (no el último corte)
           hasta
         )
         interesesLibresProyectados += interes
@@ -410,8 +412,9 @@ export async function GET(request) {
           capital_pendiente: capital,
           tasa_interes:   parseFloat(row.tasa_interes),
           periodo_tasa:   row.periodo_tasa,
-          inicio_periodo: row.inicio_periodo,
+          inicio_periodo: desde,   // ← refleja el inicio real del cálculo
           fecha_corte:    hasta,
+          dias_calculados: Math.max(0, diasD360(desde, hasta)),
           interes_proyectado: interes,
         })
       }

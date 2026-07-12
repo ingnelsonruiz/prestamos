@@ -152,6 +152,47 @@ app/creditos-libres/
 
 ---
 
+## Integración con el Dashboard
+
+### Capital en la calle
+Los créditos libres **sí contribuyen** al KPI "Capital en la calle". En `GET /api/dashboard`, el capital de cuotas normales y el capital pendiente de libres se suman en JS:
+
+```js
+en_calle: parseFloat(capitalCalle.rows[0].total) + parseFloat(cl.capital_pendiente || 0)
+```
+
+El filtro `fecha_vencimiento != '2099-12-31'` del query de cuotas excluye el placeholder, pero `cl.capital_pendiente` lo suma por separado. Comportamiento intencional.
+
+### Intereses proyectados (implementado 2026-07-12)
+
+Cuando el usuario selecciona un rango de fechas en el dashboard, la fecha **HASTA** actúa como fecha de corte para proyectar el interés de los créditos libres con la convención 30/360.
+
+**KPI "Intereses proyectados"**: muestra el total `intereses_proyectados_total = normales + libres`. Si hay libres > 0, el subtexto desglosa: `"Normales: $X · Sin cuotas (30/360): $Y"`. Sin rango seleccionado, muestra solo el interés de cuotas normales y un hint para seleccionar fechas.
+
+**Modal de doble clic** (intereses proyectados):
+- Tabla 1 — "📋 Créditos con cuotas programadas" (color verde esmeralda)
+- Tabla 2 — "📅 Créditos Sin Cuotas — interés 30/360" (color cian), con columnas: cliente, crédito, capital pendiente, días 30/360, interés proyectado
+- Los links van a `/creditos-libres/[id]`, no a `/prestamos/[id]`
+
+**`GET /api/dashboard`** retorna en el objeto `capital`:
+```js
+capital: {
+  en_calle,
+  intereses_proyectados,          // solo cuotas normales
+  intereses_libres_proyectados,   // 30/360 hasta fecha `hasta`. 0 si sin rango
+  intereses_libres_fecha_corte,   // fecha hasta usada (null si sin rango)
+  intereses_proyectados_total,    // normales + libres (el que muestra el KPI)
+  detalle_libres_proyectados,     // array: { referencia, capital_pendiente, inicio_periodo,
+                                  //   fecha_corte, dias_calculados, interes_proyectado }
+}
+```
+
+**`GET /api/dashboard/intereses-detalle`** retorna ahora `{ normales[], libres[], totales }` — ver [[API Endpoints]] para la estructura completa.
+
+> **Retrocompatibilidad frontend**: `detalleIntereses.normales ?? detalleIntereses ?? []` soporta tanto el formato nuevo (objeto) como el viejo (array plano).
+
+---
+
 ## Aislamiento garantizado
 
 - ✅ NO modifica `lib/calculos.js`

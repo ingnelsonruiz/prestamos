@@ -60,10 +60,82 @@ Catálogo completo de los Route Handlers del backend Next.js. Todas las rutas ba
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| GET | `/api/dashboard` | KPIs: `capital_en_calle`, `intereses_ganados`, `clientes_en_mora`, `recaudo_hoy`, `cartera_vencida_30d`, `total_invertido`, `num_creditos`, `total_recuperado`, `cuotas_hoy`, `cuotas_semana`, `empenos_vencer`. Fechas normalizadas a `YYYY-MM-DD` |
+| GET | `/api/dashboard` | KPIs globales. Ver estructura de respuesta abajo |
 | GET | `/api/dashboard/capital-detalle` | Desglose de "Capital en la calle" por cliente/crédito (foto del saldo actual, sin filtro de fechas) |
-| GET | `/api/dashboard/intereses-detalle` | Desglose de intereses proyectados por crédito |
+| GET | `/api/dashboard/intereses-detalle` | Desglose de intereses proyectados. Retorna `{ normales[], libres[], totales }` — ver abajo |
 | GET | `/api/dashboard/intereses-recogidos-detalle` | Desglose de intereses ya cobrados por crédito |
+
+### Estructura de respuesta `GET /api/dashboard`
+
+Acepta `?desde=YYYY-MM-DD&hasta=YYYY-MM-DD` (ambos requeridos para activar el rango).
+
+```js
+{
+  cartera: {
+    capital_activo, capital_saldado, capital_mora, capital_refinanciado,
+    num_activos, num_saldados, num_mora, num_refinanciados
+  },
+  intereses: {
+    hoy, semana, mes, total, rango,         // intereses YA COBRADOS (normales + retornos + libres)
+    intereses_prestamos,                     // desglose: solo préstamos normales
+    intereses_retornos,                      // desglose: retornos de empresas
+    intereses_creditos_libres,               // desglose: créditos libres ya cobrados
+  },
+  mora: { clientes_total, clientes_30d, monto_total, monto_0_30d, monto_31_60d, monto_mas60d },
+  recaudo: { hoy, semana, mes, total, rango, rango_pagos },
+  cartera_vencida: { vencio_hoy, vencio_semana, vencio_mes, mas_30d, total },
+  capital: {
+    en_calle,                                // cuotas normales pendientes + capital libres
+    intereses_proyectados,                   // solo créditos normales (cuotas futuras)
+    intereses_libres_proyectados,            // créditos libres calculados 30/360 hasta `hasta`. 0 si no hay rango
+    intereses_libres_fecha_corte,            // fecha `hasta` usada. null si no hay rango
+    intereses_proyectados_total,             // normales + libres (el que muestra el KPI)
+    detalle_libres_proyectados,              // array por crédito libre con: referencia, capital_pendiente,
+                                             //   inicio_periodo, fecha_corte, dias_calculados, interes_proyectado
+  },
+  creditos_libres: { cantidad, capital_pendiente, intereses_cobrados },
+  kpis: { total_invertido, num_creditos, total_recuperado, capital_en_calle },
+  rango,                                     // { desde, hasta } o null
+  cuotas_hoy, cuotas_semana, empenos_vencer, otros_rubros
+}
+```
+
+### Estructura de respuesta `GET /api/dashboard/intereses-detalle`
+
+Acepta `?desde=YYYY-MM-DD&hasta=YYYY-MM-DD`. Antes retornaba un array plano; ahora retorna un objeto con tres secciones:
+
+```js
+{
+  normales: [                   // créditos con cuotas programadas
+    {
+      cliente_id, nombre_cliente, documento,
+      producto_id, referencia, tipo_producto, monto_capital,
+      cuotas_pendientes, proxima_fecha,
+      interes_proyectado        // suma de abono_interes pendiente en cuotas
+    }
+  ],
+  libres: [                     // créditos sin cuotas — solo si hay fecha hasta
+    {
+      cliente_id, nombre_cliente, documento,
+      producto_id, referencia,
+      tasa_interes, periodo_tasa,
+      capital_pendiente,
+      inicio_periodo,           // último fecha_corte_interes o fecha_primer_pago
+      fecha_corte,              // la fecha `hasta` del rango
+      dias_calculados,          // diasD360(inicio_periodo, fecha_corte)
+      interes_proyectado        // calculado en JS con convención 30/360
+    }
+  ],
+  totales: {
+    interes_normales,
+    interes_libres,
+    total,
+    fecha_corte_libres          // fecha hasta usada para libres
+  }
+}
+```
+
+> **Retrocompatibilidad**: el frontend usa `detalleIntereses.normales ?? detalleIntereses ?? []` para soportar tanto la respuesta nueva (objeto) como la vieja (array plano).
 
 ---
 

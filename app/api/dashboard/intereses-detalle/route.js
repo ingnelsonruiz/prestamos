@@ -107,15 +107,17 @@ export async function GET(request) {
       interes_proyectado: parseFloat(r.interes_proyectado),
     }))
 
-    // Créditos libres — interés calculado en JS con 30/360 si hay fecha hasta
-    const libres = hasta
+    // Créditos libres — interés calculado en JS con 30/360.
+    // Requiere AMBAS fechas: `desde` actúa como inicio del período (no el último corte
+    // ni la fecha de desembolso), alineado con el rango seleccionado en el dashboard.
+    const libres = (hayRango && desde && hasta)
       ? libresResult.rows.map(r => {
           const capital = parseFloat(r.capital_pendiente)
           const interes = calcInteresCL(
             capital,
             parseFloat(r.tasa_interes),
             r.periodo_tasa,
-            r.inicio_periodo,
+            desde,   // ← fecha DESDE del selector (no el último corte)
             hasta
           )
           return {
@@ -127,13 +129,13 @@ export async function GET(request) {
             tasa_interes:       parseFloat(r.tasa_interes),
             periodo_tasa:       r.periodo_tasa,
             capital_pendiente:  capital,
-            inicio_periodo:     r.inicio_periodo,
+            inicio_periodo:     desde,   // ← refleja el inicio real del cálculo
             fecha_corte:        hasta,
-            dias_calculados:    Math.max(0, diasD360(r.inicio_periodo, hasta)),
+            dias_calculados:    Math.max(0, diasD360(desde, hasta)),
             interes_proyectado: interes,
           }
         }).filter(r => r.interes_proyectado > 0)
-      : []   // sin fecha hasta → no se puede calcular
+      : []   // sin rango completo → no se puede calcular
 
     return NextResponse.json({
       normales,
