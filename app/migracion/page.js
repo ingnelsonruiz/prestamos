@@ -330,6 +330,208 @@ function BotonResetCliente() {
 
 const fmt = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v || 0)
 
+// ── Corrección masiva: Interés Fijo activado por error ────────────────────────
+function FixInteresFijo() {
+  const [cargando, setCargando]       = useState(false)
+  const [creditos, setCreditos]       = useState(null)   // null = sin cargar, [] = vacío
+  const [seleccionados, setSeleccionados] = useState(new Set())
+  const [ejecutando, setEjecutando]   = useState(false)
+  const [resultado, setResultado]     = useState(null)
+  const [error, setError]             = useState('')
+  const [expandido, setExpandido]     = useState(false)
+
+  const cargar = async () => {
+    setCargando(true); setError(''); setResultado(null)
+    try {
+      const res  = await fetch('/api/admin/fix-interes-fijo')
+      const data = await res.json()
+      if (!res.ok) { setError(data.error || 'Error al consultar'); setCargando(false); return }
+      setCreditos(data.creditos)
+      setSeleccionados(new Set(data.creditos.map(c => c.id)))
+    } catch { setError('Error de conexión') }
+    finally  { setCargando(false) }
+  }
+
+  const toggleId = id => {
+    setSeleccionados(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const toggleTodos = () => {
+    setSeleccionados(prev =>
+      prev.size === creditos.length ? new Set() : new Set(creditos.map(c => c.id))
+    )
+  }
+
+  const ejecutar = async () => {
+    if (seleccionados.size === 0) return
+    setEjecutando(true); setError('')
+    try {
+      const res  = await fetch('/api/admin/fix-interes-fijo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productoIds: Array.from(seleccionados) }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error || 'Error al ejecutar'); setEjecutando(false); return }
+      setResultado(data)
+      // Recarga la lista para mostrar los que quedan
+      const res2 = await fetch('/api/admin/fix-interes-fijo')
+      const data2 = await res2.json()
+      setCreditos(data2.creditos || [])
+      setSeleccionados(new Set((data2.creditos || []).map(c => c.id)))
+    } catch { setError('Error de conexión') }
+    finally  { setEjecutando(false) }
+  }
+
+  const reset = () => { setCreditos(null); setResultado(null); setError(''); setSeleccionados(new Set()) }
+
+  return (
+    <div className="bg-indigo-50 border-2 border-indigo-200 rounded-2xl p-5 space-y-3">
+      {/* Encabezado */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-3xl">❄️🔧</span>
+          <div>
+            <p className="font-bold text-indigo-800">Corrección: Interés Fijo activado por error</p>
+            <p className="text-xs text-indigo-500">
+              Revierte <span className="font-semibold">Congelar intereses</span> en créditos donde se activó por mistake durante migración.
+              Recalcula las cuotas pendientes con interés decreciente correcto.
+            </p>
+          </div>
+        </div>
+        {creditos !== null && (
+          <button onClick={() => setExpandido(v => !v)}
+            className="text-xs text-indigo-400 hover:text-indigo-700 font-medium whitespace-nowrap">
+            {expandido ? '▲ Contraer' : '▼ Ver tabla'}
+          </button>
+        )}
+      </div>
+
+      {/* Resultado previo */}
+      {resultado && (
+        <div className={`rounded-xl px-4 py-3 text-sm font-semibold border ${resultado.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+          {resultado.ok
+            ? `✅ ${resultado.corregidos} crédito(s) revertido(s) correctamente — cuotas recalculadas con interés decreciente.`
+            : `⚠️ ${resultado.corregidos} revertido(s) · ${resultado.errores} con error. Revisa la consola del servidor.`}
+          <button onClick={() => setResultado(null)} className="ml-3 text-xs opacity-60 hover:opacity-100">✕</button>
+        </div>
+      )}
+
+      {error && <p className="text-xs text-red-600 font-medium">{error}</p>}
+
+      {/* Sin cargar aún */}
+      {creditos === null && (
+        <button onClick={cargar} disabled={cargando}
+          className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl py-2.5 font-bold text-sm">
+          {cargando ? '⏳ Consultando créditos afectados...' : '🔍 Ver créditos con Interés Fijo activo'}
+        </button>
+      )}
+
+      {/* Lista cargada */}
+      {creditos !== null && (
+        <div className="space-y-3">
+          {creditos.length === 0 ? (
+            <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700 flex items-center justify-between">
+              <span>✅ No hay créditos con <em>Interés Fijo</em> activo. Todo en orden.</span>
+              <button onClick={reset} className="text-green-400 hover:text-green-700 text-xs ml-3">Cerrar ✕</button>
+            </div>
+          ) : (
+            <>
+              {/* Resumen rápido */}
+              <div className="flex items-center justify-between bg-indigo-100 rounded-xl px-4 py-2.5">
+                <div className="text-sm font-semibold text-indigo-800">
+                  {creditos.length} crédito(s) con ❄️ Interés Fijo activo
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={reset} className="text-xs text-indigo-400 hover:text-indigo-700">Actualizar ↺</button>
+                  <button onClick={() => setExpandido(v => !v)}
+                    className="text-xs text-indigo-600 font-semibold hover:text-indigo-800">
+                    {expandido ? '▲ Ocultar' : '▼ Ver listado'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Tabla expandible */}
+              {expandido && (
+                <div className="bg-white border border-indigo-200 rounded-xl overflow-hidden">
+                  {/* Seleccionar todos */}
+                  <button onClick={toggleTodos}
+                    className="w-full flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-xs font-semibold text-indigo-800 border-b border-indigo-100">
+                    <input type="checkbox" readOnly
+                      checked={seleccionados.size === creditos.length && creditos.length > 0}
+                      className="accent-indigo-700" />
+                    {seleccionados.size === creditos.length ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                    <span className="ml-auto font-normal text-indigo-500">
+                      {seleccionados.size} de {creditos.length} seleccionado(s)
+                    </span>
+                  </button>
+
+                  <div className="max-h-72 overflow-y-auto divide-y divide-indigo-50">
+                    {creditos.map(cr => (
+                      <label key={cr.id}
+                        className="flex items-start gap-3 px-4 py-3 text-sm hover:bg-indigo-50 cursor-pointer">
+                        <input type="checkbox" checked={seleccionados.has(cr.id)}
+                          onChange={() => toggleId(cr.id)} className="mt-0.5 accent-indigo-700" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-gray-800">{cr.referencia || cr.id.slice(0,8)}</span>
+                            <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full capitalize">
+                              {cr.tipo}
+                            </span>
+                            <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full capitalize">
+                              {cr.estado}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-600 mt-0.5 truncate">{cr.nombre_cliente}</p>
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-gray-400">
+                            <span>Capital: <strong className="text-gray-700">{fmt(cr.monto_capital)}</strong></span>
+                            <span>Tasa: <strong className="text-gray-700">{cr.tasa_interes}% {cr.periodo_tasa}</strong></span>
+                            <span>Cuotas pendientes: <strong className="text-gray-700">{cr.cuotas_pendientes}</strong></span>
+                            <span>Interés pendiente: <strong className="text-red-600">{fmt(cr.interes_pendiente)}</strong></span>
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Aviso */}
+              <div className="bg-indigo-100 border border-indigo-300 rounded-xl p-3 text-xs text-indigo-800">
+                <strong>¿Qué hace el reverso?</strong> Para cada crédito seleccionado:
+                <span className="ml-1">① desactiva ❄️ Interés Fijo</span>
+                <span className="mx-1">·</span>
+                <span>② recalcula las cuotas pendientes usando el saldo de capital real (interés decreciente).</span>
+                <br/>
+                <span className="text-indigo-600 mt-1 block">Los pagos ya registrados no se tocan. Solo afecta las cuotas <strong>pendientes de cobro</strong>.</span>
+              </div>
+
+              {/* Botones de acción */}
+              <div className="flex gap-2">
+                <button onClick={reset}
+                  className="flex-1 border-2 border-indigo-200 hover:bg-indigo-50 text-indigo-700 rounded-xl py-2.5 text-sm font-semibold">
+                  Cancelar
+                </button>
+                <button onClick={ejecutar}
+                  disabled={seleccionados.size === 0 || ejecutando}
+                  className="flex-1 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-40 text-white rounded-xl py-2.5 text-sm font-bold">
+                  {ejecutando
+                    ? '⏳ Revirtiendo...'
+                    : `🔧 Revertir ${seleccionados.size} crédito(s) seleccionado(s)`}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Definición de plantillas ──────────────────────────────────────────────────
 const PLANTILLAS = [
   {
@@ -767,6 +969,7 @@ export default function MigracionPage() {
           <ToggleModoPrueba />
           <BotonReset />
           <BotonResetCliente />
+          <FixInteresFijo />
         </div>
       )}
 
