@@ -942,3 +942,42 @@ Como un `credito_libre` puede terminar unificado (estado `refinanciado`), el mó
 
 - **Mínimo 2 créditos**: si solo se quiere refinanciar uno, ya existen los flujos de "Refinanciar saldo" / "Refinanciar + prestar más" — unificar exige al menos 2 orígenes para tener sentido semántico.
 - **Movimiento de caja**: se registra el capital total como "desembolso" en `cred_movimientos_caja`, igual que cualquier refinanciación existente (aunque la mayor parte sea deuda consolidada y no dinero nuevo) — consistente con cómo ya se comporta el sistema, no es una particularidad de este módulo.
+
+---
+
+## 22. Fixes — Cobro de créditos sin interés (Congelación) — 2026-07-17
+
+### Bug: "Monto a recibir" bloqueado al cobrar un crédito Congelación con varias cuotas
+
+**Síntoma reportado por el dueño de la plataforma:** al abrir "Registrar pago" (`/cobros`) sobre un crédito **Congelación** diferido en varias cuotas (ej. `CRED-000571`, 4 cuotas mensuales de $210.000, tasa 0%), el campo "Monto a recibir" aparecía con el total precargado ($840.000) pero **no se podía editar** — no había forma de colocar lo que el cliente realmente traía (menos o más que el total).
+
+**Causa raíz:** el bloque de chips "¿Qué paga el cliente?" (`app/cobros/page.js`) — única vía de la UI para cambiar `tipoPago` a `'personalizado'`, que es lo que quita el `readOnly` del input de monto — solo se renderizaba bajo la condición `interesBase(modal) > 0`. Un crédito Congelación tiene `tasa_interes=0` (regla de negocio blindada, ver §8: "una congelación nunca cobra interés"), así que `abono_interes` de sus cuotas es siempre `0` y esa condición nunca se cumplía. El input quedaba permanentemente en modo `readOnly` con el valor que precarga `abrirModalTodo()` (la suma de todas las cuotas pendientes del crédito), sin ninguna opción para pasar a "Personalizado". El mismo problema afecta a **cualquier** crédito con tasa 0% diferido en cuotas (no solo Congelación), aunque en la práctica es el único tipo del sistema con esa combinación (tasa 0 + varias cuotas futuras).
+
+**Fix (`app/cobros/page.js`):** el bloque de chips ahora se muestra siempre que el producto no sea `fiado`/`adelanto` (que ya tienen su propio flujo de cuenta abierta), sin exigir `interesBase(modal) > 0`. Dentro del bloque, las opciones "💸 Solo intereses" y "💰 Abono capital" solo aparecen cuando sí hay interés (no aportan nada distinto de "Cuota completa" en un crédito a tasa 0); "✅ Cuota completa", "🏁 Recoger crédito" y "✏️ Personalizado" quedan siempre disponibles. Con esto el cobrador puede tocar "✏️ Personalizado" y escribir cualquier valor — menor (abono parcial a una o varias cuotas) o mayor (adelanta cuotas futuras) — en créditos a tasa 0% igual que ya podía hacerlo en cualquier crédito con interés.
+
+**Patrón a vigilar:** cualquier condición de UI en `/cobros` que dependa de `interesBase(modal) > 0` para decidir si algo se muestra debe revisarse pensando específicamente en créditos a tasa 0% (Congelación, y cualquier tipo futuro que se cree con la misma combinación) — ese valor no es un "caso raro", es el comportamiento normal y esperado de ese tipo de crédito.
+
+**Segunda vuelta del mismo bug (mismo día):** con el fix anterior ya aparecía el chip "✏️ Personalizado", pero el campo "Monto a recibir" seguía sin dejar escribir un valor distinto. Causa: el `<input>` tenía `readOnly={tipoPago !== 'personalizado'}` — `readOnly` en HTML bloquea el tecleo por completo (solo permite seleccionar/copiar el texto ya existente), así que aunque el usuario hiciera clic en el campo y el valor quedara "seleccionado" en azul, no había forma de escribir encima sin **primero** tocar el chip "Personalizado". Ese paso intermedio no era intuitivo — el cobrador esperaba poder escribir directamente. **Fix:** se quitó el `readOnly` por completo; el campo ahora es editable siempre, y el `onChange` (que ya existía) cambia `tipoPago` a `'personalizado'` automáticamente apenas se edita el valor — un solo paso, sin clic previo en ningún chip. El texto de ayuda debajo del campo se replanteó de "Monto fijado por el tipo seleccionado" (sonaba a bloqueo) a "Monto sugerido según el tipo seleccionado — puedes escribir otro valor".
+
+### Nuevo filtro "❄️ Congelados" en `/prestamos`
+
+**Necesidad:** el dueño de la plataforma no tenía forma de ubicar rápidamente qué créditos son de tipo **Congelación** (`cred_productos.tipo='congelacion'`) — que **nunca cobran interés**, usados para diferir una deuda vencida a tasa 0 (§8) — y los confundía con los créditos de **interés fijo/congelado** (`interes_fijo=true`, badge "❄️ Fijo" en el detalle del crédito, §17), que sí cobran interés, solo que no decrece con abonos a capital. Son dos conceptos distintos que comparten el emoji ❄️ y el nombre "congelado/congelación" en el lenguaje del negocio, lo cual genera confusión.
+
+**Implementación (`app/prestamos/page.js`):** nuevo botón-toggle "❄️ Congelados" junto a "📅 Creados hoy" (mismo patrón de segmentador independiente, combinable con la pestaña de estado y el segmento Clientes/Empresas), que filtra `p.tipo === 'congelacion'` y muestra el conteo total de créditos de ese tipo. Se agregó también `tipoLabel.congelacion = '❄️ Congelación'` y `tipoColor.congelacion` (cian) para que el chip de tipo en cada fila de la tabla se identifique correctamente — antes caía en el fallback genérico y mostraba el código crudo `congelacion` en vez de una etiqueta legible.
+
+**Distinción a tener siempre presente en el sistema:**
+| Concepto | Campo | Cobra interés | Dónde se ve |
+|----------|-------|----------------|-------------|
+| Congelación (tipo de crédito) | `cred_productos.tipo = 'congelacion'` | **Nunca** (tasa forzada a 0, §8) | Badge "CONGELACION" en el detalle + nuevo filtro "❄️ Congelados" en `/prestamos` |
+| Interés fijo / congelado (opción de un préstamo plano) | `cred_productos.interes_fijo = true` | **Sí**, pero calculado siempre sobre el capital original (no decrece con abonos) | Badge "❄️ Fijo" junto a la Tasa en el detalle del crédito (§17) |
+
+### Deep-link "Registrar cobro" desde el detalle del crédito → `/cobros`
+
+**Problema:** el botón "Registrar cobro" en `/prestamos/[id]` enlazaba a `/cobros` a secas — el cobrador tenía que volver a buscar manualmente al cliente/crédito en la lista completa para poder pagar, perdiendo el contexto desde el que venía. `/creditos-libres/[id]` ya resolvía esto para su propio módulo con `?abrir=1` (ver §18), pero el flujo de cuotas normales (`/cobros`) no tenía equivalente.
+
+**Fix:**
+- `app/prestamos/[id]/page.js`: el botón ahora enlaza a `/cobros?producto_id=${data.id}`.
+- `app/cobros/page.js`: se envolvió el componente en `<Suspense>` (patrón ya usado en `/prestamos`, requerido por Next.js 15 para `useSearchParams`) y se leyó el nuevo parámetro `producto_id`. Un `useEffect` (con `useRef` como guardia para que solo dispare una vez) espera a que `grupos` cargue, busca el grupo cuyo `producto_id` coincide, abre su acordeón, dispara `fetchHistorial` y llama a `abrirModalTodo(grupo)` — la misma función que ya usa el botón "Pagar" de la lista, así que el comportamiento (incluida la redirección a `/creditos-libres/[id]?abrir=1` si el crédito es `credito_libre`) es idéntico al de siempre, solo que automático.
+- El segmento inicial (`Clientes`/`Empresas`/`Todos`) se fuerza a `'todos'` cuando llega el deep-link, porque el crédito de origen puede ser de un cliente o de una empresa interna y el segmento por defecto (`'clientes'`) lo dejaría fuera de `grupos` sin poder encontrarlo nunca.
+
+**Patrón a replicar:** cualquier botón nuevo que redirija desde el detalle de un crédito hacia `/cobros` para cobrar debería usar este mismo `?producto_id=`, en vez de enlazar a `/cobros` sin contexto.

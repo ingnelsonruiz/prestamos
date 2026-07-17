@@ -673,7 +673,7 @@ export default function DetallePrestamo() {
                 Registrar cobro
               </span>
             ) : (
-              <Link href="/cobros" className="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700">
+              <Link href={`/cobros?producto_id=${data.id}`} className="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700">
                 Registrar cobro
               </Link>
             )}

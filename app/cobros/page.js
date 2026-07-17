@@ -1,6 +1,6 @@
 'use client'
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useState, useRef, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import * as XLSX from 'xlsx'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
@@ -8,8 +8,24 @@ const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',
 const tipoIcon  = { prestamo:'💰', venta:'🛍', empeno:'🔒', fiado:'🌿', adelanto:'🤝' }
 const tipoLabel = { prestamo:'Préstamo', venta:'Venta crédito', empeno:'Empeño', fiado:'Fiado finca', adelanto:'Adelanto' }
 
+// Wrapper requerido por Next.js 15: useSearchParams debe estar dentro de <Suspense>
 export default function CobrosPage() {
+  return (
+    <Suspense fallback={<div className="text-gray-400 p-4">Cargando...</div>}>
+      <CobrosContent />
+    </Suspense>
+  )
+}
+
+function CobrosContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // Deep-link desde el detalle de un crédito (`/prestamos/[id]` → botón
+  // "Registrar cobro"): antes siempre mandaba a `/cobros` a secas y el
+  // cobrador tenía que volver a buscar el crédito. Con `?producto_id=`
+  // se abre el modal de pago directo sobre ese crédito, sin búsqueda manual.
+  const productoIdDeepLink = searchParams.get('producto_id')
+  const autoAbrioRef = useRef(false)
   const [grupos, setGrupos]   = useState([])   // agrupado por producto
   const [abiertos, setAbiertos] = useState({}) // acordeón
   const [buscar, setBuscar]   = useState('')
@@ -32,7 +48,10 @@ export default function CobrosPage() {
   const [historialPagos, setHistorialPagos] = useState({})  // keyed by producto_id
   const [alertaRefinanciar, setAlertaRefinanciar] = useState(null) // { productoId, capitalPendiente, nombreCliente }
   const [envio, setEnvio] = useState(null) // { tramoKey, tramoLabel, lista:[...], idx, enviados:{} }
-  const [segmento, setSegmento] = useState('clientes') // 'clientes' | 'empresas' | 'todos'
+  // Si viene un deep-link de producto_id, arrancar en 'todos' — el crédito
+  // podría ser de un cliente o de una empresa interna, y el segmento por
+  // defecto ('clientes') lo dejaría fuera de `grupos` sin encontrarlo nunca.
+  const [segmento, setSegmento] = useState(productoIdDeepLink ? 'todos' : 'clientes') // 'clientes' | 'empresas' | 'todos'
 
   // Fecha local sin desfase UTC
   const hoy = (() => {
@@ -78,6 +97,20 @@ export default function CobrosPage() {
   }
 
   useEffect(() => { cargar(segmento) }, [segmento])
+
+  // Auto-abrir el modal de pago cuando se llega desde `/prestamos/[id]` con
+  // `?producto_id=`. Solo una vez (autoAbrioRef) para no reabrirlo si el
+  // usuario lo cierra y `grupos` se refresca por otra causa (ej. segmento).
+  useEffect(() => {
+    if (!productoIdDeepLink || autoAbrioRef.current || grupos.length === 0) return
+    const grupo = grupos.find(g => g.producto_id === productoIdDeepLink)
+    if (grupo) {
+      autoAbrioRef.current = true
+      setAbiertos(a => ({ ...a, [grupo.producto_id]: true }))
+      if (!historialPagos[grupo.producto_id]) fetchHistorial(grupo.producto_id)
+      abrirModalTodo(grupo)
+    }
+  }, [grupos, productoIdDeepLink])
 
   const fetchHistorial = id => {
     fetch(`/api/historial?producto_id=${id}`)
@@ -1265,15 +1298,24 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
               })()}
             </div>
 
-            {/* Chips tipo de pago */}
-            {modal.tipo_producto !== 'fiado' && modal.tipo_producto !== 'adelanto' && interesBase(modal) > 0 && (
+            {/* Chips tipo de pago
+                Antes este bloque solo aparecía si interesBase(modal) > 0 — para créditos
+                sin interés (ej. Congelación a tasa 0%) esa condición nunca se cumplía y
+                el usuario quedaba sin forma de pasar a "Personalizado", con el campo
+                "Monto a recibir" bloqueado (readOnly) en el total precargado. Ahora se
+                muestra siempre (salvo fiado/adelanto, que ya tienen su propio flujo de
+                cuenta abierta); "Solo intereses" y "Abono capital" se ocultan cuando no
+                hay interés (no aportan nada distinto de "Cuota completa"). */}
+            {modal.tipo_producto !== 'fiado' && modal.tipo_producto !== 'adelanto' && (
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-2">¿Qué paga el cliente?</label>
                 <div className="grid grid-cols-2 gap-1.5 [&>*:last-child]:col-span-2">
                   {[
                     { key: 'completo',        label: '✅ Cuota completa',   monto: fmt(pendiente(modal)),   color: 'bg-green-600 text-white' },
-                    { key: 'solo_interes',    label: '💸 Solo intereses',   monto: fmt(interesPend(modal)), color: 'bg-orange-500 text-white' },
-                    { key: 'abono_capital',   label: '💰 Abono capital',    monto: fmt(capitalPend(modal)), color: 'bg-blue-600 text-white'   },
+                    ...(interesBase(modal) > 0 ? [
+                      { key: 'solo_interes',    label: '💸 Solo intereses',   monto: fmt(interesPend(modal)), color: 'bg-orange-500 text-white' },
+                      { key: 'abono_capital',   label: '💰 Abono capital',    monto: fmt(capitalPend(modal)), color: 'bg-blue-600 text-white'   },
+                    ] : []),
                     { key: 'recoger_credito', label: '🏁 Recoger crédito',  monto: (() => {
                         const grupo = grupos.find(g => g.producto_id === modal.producto_id)
                         const totalCap = grupo ? grupo.cuotas.reduce((s,c) => s + capitalPend(c), 0) : capitalPend(modal)
@@ -1321,6 +1363,13 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
 
             <div>
               <label className="text-xs font-medium text-gray-600">Monto a recibir</label>
+              {/* SIEMPRE editable — antes tenía readOnly mientras tipoPago no fuera
+                  'personalizado', y readOnly bloquea el tecleo por completo (solo
+                  permite seleccionar/copiar el texto, lo que confundía al cobrador:
+                  veía el valor "seleccionado" en azul pero no podía escribir encima).
+                  Exigía un clic previo en el chip "✏️ Personalizado", nada intuitivo.
+                  Ahora basta con escribir directamente: el onChange ya cambia
+                  tipoPago a 'personalizado' automáticamente en cuanto se edita. */}
               <input type="text"
                 className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:outline-none"
                 value={monto !== '' ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(Number(monto)) : ''}
@@ -1329,10 +1378,9 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                   setMonto(raw)
                   setTipoPago('personalizado')
                 }}
-                readOnly={tipoPago !== 'personalizado'}
               />
               {tipoPago !== 'personalizado' && (
-                <p className="text-xs text-gray-400 mt-1">Monto fijado por el tipo seleccionado</p>
+                <p className="text-xs text-gray-400 mt-1">Monto sugerido según el tipo seleccionado — puedes escribir otro valor</p>
               )}
             </div>
             <div>

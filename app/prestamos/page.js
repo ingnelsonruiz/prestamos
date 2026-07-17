@@ -5,8 +5,8 @@ import Link from 'next/link'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
 
-const tipoColor  = { prestamo:'bg-blue-100 text-blue-700', venta:'bg-yellow-100 text-yellow-700', empeno:'bg-purple-100 text-purple-700', fiado:'bg-green-100 text-green-700', adelanto:'bg-teal-100 text-teal-700', inversion:'bg-violet-100 text-violet-700' }
-const tipoLabel  = { prestamo:'Préstamo', venta:'Venta', empeno:'Empeño', fiado:'Fiado', adelanto:'Adelanto' }
+const tipoColor  = { prestamo:'bg-blue-100 text-blue-700', venta:'bg-yellow-100 text-yellow-700', empeno:'bg-purple-100 text-purple-700', fiado:'bg-green-100 text-green-700', adelanto:'bg-teal-100 text-teal-700', inversion:'bg-violet-100 text-violet-700', congelacion:'bg-cyan-100 text-cyan-700' }
+const tipoLabel  = { prestamo:'Préstamo', venta:'Venta', empeno:'Empeño', fiado:'Fiado', adelanto:'Adelanto', congelacion:'❄️ Congelación' }
 const estadoBadge = { activo:'bg-blue-100 text-blue-700', al_dia:'bg-green-100 text-green-700', en_mora:'bg-red-100 text-red-700', saldado:'bg-emerald-100 text-emerald-700', refinanciado:'bg-purple-100 text-purple-700' }
 
 // Wrapper requerido por Next.js 15: useSearchParams debe estar dentro de <Suspense>
@@ -32,12 +32,19 @@ function PrestamosContent() {
   const [soloHoy, setSoloHoy] = useState(false)
   const hoyLocal = new Date().toLocaleDateString('en-CA')
   const esDeHoy  = p => !!p.fecha_creacion && new Date(p.fecha_creacion).toLocaleDateString('en-CA') === hoyLocal
+  // Segmentador independiente: créditos "Congelación" (tipo='congelacion' —
+  // ver CLAUDE.md §8). Son créditos que NUNCA cobran interés (diferimiento
+  // de una deuda vencida a tasa 0), distintos de "interés fijo/congelado"
+  // (interes_fijo=true, que sí cobra interés, solo que no decrece con abonos
+  // a capital). El dueño de la plataforma pidió poder ubicarlos fácilmente.
+  const [soloCongelados, setSoloCongelados] = useState(false)
 
   useEffect(() => {
     fetch('/api/productos').then(r=>r.json()).then(setProductos)
   },[])
 
-  const creadosHoy = productos.filter(esDeHoy)
+  const creadosHoy  = productos.filter(esDeHoy)
+  const congelados  = productos.filter(p => p.tipo === 'congelacion')
 
   const filtrados = productos.filter(p => {
     const q = buscar.toLowerCase()
@@ -51,7 +58,8 @@ function PrestamosContent() {
       || (segmento === 'clientes'  && !p.es_prestamo_interno)
       || (segmento === 'empresas'  &&  p.es_prestamo_interno)
     const matchHoy = !soloHoy || esDeHoy(p)
-    return matchBuscar && matchEstado && matchSegmento && matchHoy
+    const matchCongelados = !soloCongelados || p.tipo === 'congelacion'
+    return matchBuscar && matchEstado && matchSegmento && matchHoy && matchCongelados
   })
 
   // KPIs rápidos por segmento
@@ -193,6 +201,15 @@ function PrestamosContent() {
             📅 Creados hoy
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${soloHoy ? 'bg-white/20' : 'bg-emerald-100'}`}>
               {creadosHoy.length}
+            </span>
+          </button>
+          <button onClick={() => setSoloCongelados(v => !v)}
+            title="Créditos tipo Congelación: no cobran interés (distinto de 'interés fijo')"
+            className={`px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap flex-shrink-0 flex items-center gap-1.5
+              ${soloCongelados ? 'bg-cyan-600 text-white' : 'bg-white border border-cyan-200 text-cyan-700 hover:bg-cyan-50'}`}>
+            ❄️ Congelados
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${soloCongelados ? 'bg-white/20' : 'bg-cyan-100'}`}>
+              {congelados.length}
             </span>
           </button>
         </div>
