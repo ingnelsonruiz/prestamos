@@ -63,7 +63,34 @@ export async function GET(request, { params }) {
       retornos = retRes.rows
     }
 
-    return NextResponse.json({ ...prod.rows[0], cuotas: cuotasConMora, tiene_pagos, retornos })
+    // ── Trazabilidad de "Unificar Créditos" (ver CLAUDE.md §21) ──────────
+    // Si este crédito NACIÓ de unificar varios: lista de créditos de origen
+    // con el capital que aportó cada uno.
+    const unifOrigenes = await query(
+      `SELECT u.credito_origen_id, u.capital_aportado, u.fecha_creacion,
+              p.referencia, p.tipo, p.monto_capital AS monto_capital_origen
+       FROM ${S}.cred_unificaciones u
+       JOIN ${S}.cred_productos p ON p.id = u.credito_origen_id
+       WHERE u.credito_nuevo_id = $1
+       ORDER BY u.capital_aportado DESC`,
+      [id]
+    ).catch(() => ({ rows: [] }))
+
+    // Si este crédito FUE absorbido en una unificación: a qué crédito nuevo.
+    const unifDestino = await query(
+      `SELECT u.credito_nuevo_id, u.capital_aportado, u.fecha_creacion, p.referencia
+       FROM ${S}.cred_unificaciones u
+       JOIN ${S}.cred_productos p ON p.id = u.credito_nuevo_id
+       WHERE u.credito_origen_id = $1
+       LIMIT 1`,
+      [id]
+    ).catch(() => ({ rows: [] }))
+
+    return NextResponse.json({
+      ...prod.rows[0], cuotas: cuotasConMora, tiene_pagos, retornos,
+      unificado_desde: unifOrigenes.rows,
+      unificado_en: unifDestino.rows[0] || null,
+    })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }

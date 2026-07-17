@@ -89,6 +89,17 @@ export async function GET(request, { params }) {
       : typeof v === 'string' ? v.slice(0, 10)
       : new Date(v).toISOString().slice(0, 10)
 
+    // Si este crédito fue absorbido en una "Unificar Créditos" (ver
+    // CLAUDE.md §21): a qué crédito nuevo, y cuánto capital aportó.
+    const unifDestino = await query(
+      `SELECT u.credito_nuevo_id, u.capital_aportado, u.fecha_creacion, p.referencia
+       FROM ${S}.cred_unificaciones u
+       JOIN ${S}.cred_productos p ON p.id = u.credito_nuevo_id
+       WHERE u.credito_origen_id = $1
+       LIMIT 1`,
+      [id]
+    ).catch(() => ({ rows: [] }))
+
     return NextResponse.json({
       ...prod,
       fecha_inicio_credito: toYMD(prod.fecha_inicio_credito || prod.fecha_primer_pago || prod.fecha_creacion),
@@ -101,6 +112,7 @@ export async function GET(request, { params }) {
             : new Date(ultimaFechaCorte).toISOString().slice(0, 10))
         : null,
       pagos: pagosNorm,
+      unificado_en: unifDestino.rows[0] || null,
     })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })

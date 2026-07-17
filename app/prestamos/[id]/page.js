@@ -822,6 +822,43 @@ export default function DetallePrestamo() {
             </div>
           </div>
         )}
+
+        {/* Trazabilidad de "Unificar Créditos" (ver CLAUDE.md §21): este
+            crédito consolidó el capital pendiente de varios créditos
+            anteriores en uno solo. Se lista cada origen con lo que aportó,
+            para poder reconstruir "de dónde salió" este capital. */}
+        {data.unificado_desde?.length > 0 && (
+          <div className="px-6 py-4 bg-indigo-50 border-t border-indigo-200 text-sm text-indigo-800">
+            <p className="font-bold flex items-center gap-1.5 mb-2">
+              🔗 Este crédito unificó {data.unificado_desde.length} créditos anteriores
+            </p>
+            <div className="space-y-1.5">
+              {data.unificado_desde.map(o => (
+                <div key={o.credito_origen_id} className="flex justify-between items-center bg-white/60 rounded-lg px-3 py-1.5">
+                  <Link href={`/prestamos/${o.credito_origen_id}`} className="font-medium hover:underline">
+                    {o.referencia || o.credito_origen_id}
+                  </Link>
+                  <span className="font-bold">{fmt(o.capital_aportado)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Este crédito fue absorbido en una unificación posterior */}
+        {data.unificado_en && (
+          <div className="px-6 py-4 bg-indigo-50 border-t border-indigo-200 text-sm text-indigo-800 flex items-start gap-2.5">
+            <span className="text-lg leading-none">🔗</span>
+            <p className="flex-1">
+              <strong>Este crédito fue unificado</strong> junto con otros en el crédito{' '}
+              <Link href={`/prestamos/${data.unificado_en.credito_nuevo_id}`} className="font-bold underline">
+                {data.unificado_en.referencia || data.unificado_en.credito_nuevo_id}
+              </Link>
+              {' '}el {new Date(String(data.unificado_en.fecha_creacion).split('T')[0] + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'})},
+              aportando <strong>{fmt(data.unificado_en.capital_aportado)}</strong> de capital.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Historial de pagos */}

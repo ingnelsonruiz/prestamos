@@ -66,6 +66,7 @@ Programa_Creditos/
 │   │   ├── clientes/[id]/
 │   │   ├── productos/[id]/
 │   │   │   └── liquidar/          # POST liquidación anticipada
+│   │   ├── productos/unificar/    # POST unificar varios créditos en uno nuevo
 │   │   ├── cuotas/
 │   │   ├── pagos/
 │   │   ├── dashboard/
@@ -92,7 +93,7 @@ Programa_Creditos/
 │   │   └── auditoria/
 │   ├── login/
 │   ├── clientes/[id]/
-│   ├── prestamos/[id]/ nuevo/
+│   ├── prestamos/[id]/ nuevo/ unificar/
 │   ├── cobros/
 │   ├── empenos/
 │   ├── recibos/                   # Módulo búsqueda de recibos
@@ -310,6 +311,19 @@ Historial de exportaciones y restauraciones de la base.
 | tamanio_kb | NUMERIC | |
 | notas | TEXT | |
 
+#### `cred_unificaciones`
+Traza de **Unificar Créditos** (ver §21): qué créditos de origen se consolidaron en un crédito nuevo (relación N:1, a diferencia de `es_refinanciacion_de` que es 1:1) y cuánto capital aportó cada uno.
+
+| Campo | Tipo | Notas |
+|-------|------|-------|
+| id | TEXT PK | |
+| credito_nuevo_id | TEXT FK → `cred_productos` | El crédito resultante de la unificación |
+| credito_origen_id | TEXT FK → `cred_productos` | Uno de los créditos consolidados |
+| capital_aportado | NUMERIC | Capital pendiente real que aportó ese origen puntual |
+| fecha_creacion | TIMESTAMP | |
+
+Cada unificación genera **una fila por crédito de origen** (mismo `credito_nuevo_id`, distinto `credito_origen_id`). Los orígenes también quedan con `estado='refinanciado'` y `refinanciado_por=<credito_nuevo_id>` — el mismo mecanismo que ya usa la refinanciación 1:1 normal — para que todos los filtros y KPIs existentes (dashboard, listados de `/prestamos`, capital en la calle) dejen de contarlos automáticamente, sin necesidad de tocar esas queries.
+
 ---
 
 ## 5. Lógica Financiera (`lib/calculos.js`)
@@ -361,6 +375,7 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 | POST | `/api/productos` | Fiado/adelanto: cuenta abierta. Otros: genera cuotas. Asigna `referencia` (CRED-XXXXXX) y `metodo_desembolso`. Snapshot de creación en `cred_historial_recalculos`. Si `es_refinanciacion_de` viene con `monto_inyectado > 0` (refinanciación + dinero nuevo), lo persiste aparte del total (ver §19); se fuerza a 0 si el crédito no es una refinanciación. |
 | GET/PUT | `/api/productos/[id]` | |
 | POST | `/api/productos/[id]/liquidar` | Liquidación anticipada con valor acordado |
+| POST | `/api/productos/unificar` | Unifica **varios** créditos activos de un mismo cliente en uno nuevo. Body: `{ cliente_id, credito_ids: [...] (mín. 2), tipo, tasa_interes, periodo_tasa, frecuencia_cobro, num_cuotas, fecha_primer_pago, metodo_calculo, interes_fijo, metodo_desembolso, entidad_desembolso, referencia_desembolso, monto_inyectado, notas, fecha_desembolso }`. Calcula el capital pendiente real de cada origen desde `cred_cuotas` (server-side), marca los orígenes `refinanciado`, y registra la traza en `cred_unificaciones`. Ver §21. |
 
 **GROUP BY en `/api/productos` GET**: `p.id, c.nombre, c.documento, c.telefono, c.direccion, por.referencia, orig.referencia`
 
@@ -552,6 +567,7 @@ Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para 
 | `20_sin_cuotas_futuras.sql` | **Módulo Créditos Sin Cuotas Futuras**: (1) `ALTER TABLE cred_pagos ADD COLUMN IF NOT EXISTS fecha_corte_interes DATE NULL`; (2) elimina el CHECK de comportamientos en `cred_tipos_prestamo`; (3) inserta el tipo `credito_libre` (`comportamiento='sin_cuotas_futuras'`). Idempotente. **No es necesario ejecutarla manualmente** — `autoMigrar()` la ejecuta en cada llamada a los endpoints del módulo. |
 | `21_monto_inyectado.sql` | Columna `cred_productos.monto_inyectado NUMERIC NOT NULL DEFAULT 0`. Registra el dinero nuevo desembolsado en una refinanciación con inyección de capital ("Refinanciar + prestar más"), independiente del saldo que hizo rollover. Ver §19. |
 | `22_fecha_desembolso.sql` | Columna `cred_productos.fecha_desembolso DATE NULL`. Fecha real de entrega del dinero al cliente, editable por el usuario (distinta de `fecha_creacion`, automática). NULL en créditos anteriores — usar `fecha_creacion::date` como respaldo. Ver §19. |
+| `23_unificacion_creditos.sql` | Tabla `cred_unificaciones` (id, credito_nuevo_id, credito_origen_id, capital_aportado, fecha_creacion). Traza N:1 de qué créditos se consolidaron en un crédito nuevo al usar "Unificar Créditos". Ver §21. |
 
 > **Convención de mora**: `cred_cuotas.estado` ∈ {`pendiente`,`parcial`,`pagada`}. La **mora NO es un estado almacenado**; se deriva por `fecha_vencimiento < CURRENT_DATE` en cada consulta (Cobros, dashboard, informes, listados de clientes/productos). El cargue inicial fija la mora solo a nivel de **producto** (`estado='en_mora'`), nunca en la cuota. **`cred_productos.estado` tampoco se re-evalúa después de creado** (ningún endpoint lo transiciona a `'en_mora'` salvo el cargue inicial), por lo que ningún filtro o vista debe usar `p.estado === 'en_mora'` para detectar mora real; usar siempre el conteo dinámico `cuotas_mora` que expone `GET /api/productos` (cuotas con `fecha_vencimiento < CURRENT_DATE`, `estado != 'pagada'` y `fecha_vencimiento <> '2099-12-31'`).
 >
@@ -885,3 +901,44 @@ Columna `cred_productos.fecha_desembolso DATE NULL` (`22_fecha_desembolso.sql`).
 **Ajuste de tono del cierre (mismo día):** a pedido del dueño del negocio, el cierre del mensaje se simplificó a un texto puramente informativo que invita al cliente a acercarse a pagar, en vez de agradecer compromiso/puntualidad por anticipado: `'Un pago puntual habla muy bien de usted. Le invitamos a acercarse para ponerse al día...'` (mora) / `'...Le invitamos a acercarse en la fecha indicada. Gracias.'` (hoy/mañana/semana/quince).
 
 **Retiro temporal de montos del mensaje (mismo día):** mientras se termina de afinar el cálculo de capital/interés pendiente (fuente de los valores que se venían mostrando), el negocio pidió que el mensaje de WhatsApp **no incluya ninguna cifra** — ni el desglose por cuota, ni el total. Se eliminó por completo el bloque `detalle` (la función `bloque()` y el `.map` sobre `cl.productos`) y la línea `*Total que debe: {total}*` de `buildMensaje()`. El mensaje quedó reducido a: saludo + una frase de contexto según el tramo (mora/hoy/mañana/otros, sin montos) + el cierre informativo de la sección anterior. `cl.productos`/`cl.total` se siguen calculando en `iniciarEnvio()` (se usan para filtrar clientes con deuda y para el contador interno "Cliente X de Y · {fmt(cur.total)}" que ve el cobrador en el modal — **ese** total es solo para uso interno del operador, no viaja al cliente). Cuando el cálculo de capital/interés quede validado, reintroducir el desglose es tan simple como restaurar el bloque `detalle` documentado arriba.
+
+---
+
+## 21. Unificar Créditos — 2026-07-17
+
+Módulo nuevo, accesible desde el sidebar ("🔗 Unificar Créditos", debajo de "Préstamos") y desde un botón en `/prestamos`. Permite seleccionar **varios** créditos activos de un mismo cliente, consolidar su capital pendiente en un solo crédito nuevo con condiciones propias, y deja registro exacto de qué créditos se unificaron y cuánto aportó cada uno.
+
+### Por qué no reutiliza `es_refinanciacion_de`
+
+`cred_productos.es_refinanciacion_de` modela una relación **1:1** (un crédito nuevo viene de un único crédito origen) — es la base de toda la refinanciación existente (`urlRefinanciar`, `urlRefinanciarCapitalFijo`, "Refinanciar + prestar más", congelación). Unificar es **N:1** (varios orígenes → un crédito nuevo), que ese campo no puede representar. En vez de forzarlo, se creó una tabla puente dedicada: `cred_unificaciones` (ver §4 y `23_unificacion_creditos.sql`), con una fila por cada crédito de origen consolidado.
+
+Los créditos de origen SÍ reutilizan el mecanismo ya existente `estado='refinanciado'` + `refinanciado_por=<credito_nuevo_id>` — el mismo que usa la refinanciación 1:1 — para que todos los filtros y KPIs que ya excluyen créditos refinanciados (dashboard, `/prestamos`, capital en la calle) dejen de contarlos automáticamente, sin tocar una sola query existente. `cred_unificaciones` solo aporta la traza fina (qué orígenes, cuánto aportó cada uno, cuándo).
+
+### Regla de negocio: solo se consolida capital, nunca interés no causado
+
+Igual que la corrección aplicada a "Refinanciar + prestar más" (§19): el capital que aporta cada crédito de origen es su **capital pendiente real** (`abono_capital − lo ya absorbido por pagos`, con la convención "interés primero" de siempre), **nunca** el interés de cuotas que aún no vencen. Esto evita anatocismo (cobrar interés sobre interés no devengado) y hace que el capital del crédito nuevo sea "limpio" — por eso, a diferencia de "congelación" (cuyo `monto_capital` sí mezcla interés viejo y por eso se excluye de los KPIs de capital del dashboard), el crédito resultante de una unificación **cuenta normalmente** en esos KPIs: no hizo falta agregar ninguna exclusión nueva.
+
+El cálculo del capital pendiente se hace **en el servidor** (`POST /api/productos/unificar`, consultando `cred_cuotas` directamente), no confiando en las cifras que pudiera mandar el cliente — el frontend (`/prestamos/unificar`) calcula el mismo número con la misma fórmula solo para mostrárselo al usuario *antes* de confirmar, pidiendo el detalle completo (`GET /api/productos/[id]`) de cada crédito candidato.
+
+### Implementación
+
+- **`23_unificacion_creditos.sql`**: tabla `cred_unificaciones` (id, credito_nuevo_id, credito_origen_id, capital_aportado, fecha_creacion) + índices por ambas FK. Aplicada en Supabase y en `00_schema_completo.sql`.
+- **`app/api/productos/unificar/route.js`** (POST, nuevo endpoint dedicado — no se sobrecargó `POST /api/productos` para no complicar un endpoint ya delicado): valida que los `credito_ids` (mínimo 2) pertenezcan al mismo cliente y no estén `saldado`/`refinanciado`. Calcula `capitalPorCredito` desde `cred_cuotas`, suma + `monto_inyectado` opcional (mismo campo de §19, para poder sumar dinero nuevo en la misma operación), crea el crédito nuevo (consecutivo `CRED-XXXXXX`, `generarCuotas`, movimiento de caja, snapshot `cred_historial_recalculos` tipo `creacion` — mismo patrón que `POST /api/productos`), marca los orígenes como `refinanciado`, inserta las filas de `cred_unificaciones`, y audita (`ACCIONES.UNIFICAR_CREDITOS`, nueva constante en `lib/auditoria.js`). Todo dentro de `withTransaction`.
+- **Incluye créditos `credito_libre`** (Créditos Sin Cuotas Futuras, §18): aunque ese módulo es intencionalmente aislado, su cuota placeholder (`abono_capital=monto_capital`, `abono_interes=0` fijo, `monto_pagado` que solo acumula abonos a capital — ver `app/api/creditos-libres/[id]/abonar/route.js`) hace que la fórmula genérica "interés primero" (`capitalPagado = monto_pagado − abono_interes`; `pendiente = abono_capital − capitalPagado`) dé como resultado **exactamente** `monto_capital − capital_pagado`, la misma fórmula propia del módulo. No hizo falta ninguna rama de cálculo especial — solo se quitó la exclusión de `tipo==='credito_libre'` en el backend y el frontend.
+- **`app/api/productos/[id]/route.js`** (GET): dos queries nuevas contra `cred_unificaciones` (con `.catch(() => ({rows:[]}))` por si la tabla no existiera en un ambiente viejo): `unificado_desde` (si este crédito es el resultado de una unificación, lista los orígenes con `capital_aportado`) y `unificado_en` (si este crédito fue absorbido en una unificación, el crédito nuevo al que pertenece).
+- **`app/prestamos/unificar/page.js`** (nueva página): selector de cliente → lista sus créditos elegibles con checkbox y el capital pendiente real de cada uno (calculado igual que el backend) → al seleccionar 2+, se arma un bloque "🔗 N créditos seleccionados" con el capital consolidado + campo opcional de dinero nuevo + formulario de condiciones del crédito nuevo (tipo, tasa, período, frecuencia, método, cuotas, fecha primer pago, congelar intereses, medio de desembolso, fecha de desembolso, notas) + vista previa de amortización (reutiliza `calcularInteresPlano`/`calcularFrances` de `lib/calculos.js`, igual que `/prestamos/nuevo`) → `POST /api/productos/unificar` → redirige al detalle del crédito nuevo.
+- **`app/prestamos/[id]/page.js`**: dos bloques informativos nuevos (estilo índigo) en la tarjeta de la tabla de cuotas — "🔗 Este crédito unificó N créditos anteriores" (lista con enlace a cada origen y lo que aportó) cuando `data.unificado_desde.length > 0`, y "Este crédito fue unificado en CRED-X" cuando `data.unificado_en` existe.
+- **Navegación**: ítem "🔗 Unificar Créditos" en `components/Sidebar.jsx` justo debajo de "Préstamos" (con ajuste en el resaltado de activo para que no se marquen ambos ítems a la vez), y botón "🔗 Unificar créditos" junto a "+ Nuevo" en `app/prestamos/page.js`.
+
+### Ajustes en el módulo Créditos Sin Cuotas Futuras para soportar unificación
+
+Como un `credito_libre` puede terminar unificado (estado `refinanciado`), el módulo antes aislado (§18) necesitó tres ajustes mínimos para no quedar inconsistente:
+
+- **`app/api/creditos-libres/[id]/abonar/route.js`**: nueva guardia — si `prod.estado === 'refinanciado'` rechaza el abono (`400`, "Este crédito ya fue unificado en otro crédito — los abonos se registran allá"), igual que ya hacía con `saldado`. Sin esto, se podría seguir abonando a un crédito cuyo capital ya se trasladó al nuevo, duplicando el cobro.
+- **`app/api/creditos-libres/[id]/route.js`** (GET) y **`app/creditos-libres/[id]/page.js`**: mismo patrón `unificado_en` que `/api/productos/[id]` — si el crédito libre fue absorbido, se muestra un bloque índigo "🔗 Este crédito fue unificado en CRED-X" con el capital aportado, y se oculta el botón "💰 Registrar abono".
+- **`app/creditos-libres/page.js`**: el filtro "Activos" y el conteo de KPI ("Créditos activos") solo excluían `estado==='saldado'` — se corrigió para excluir también `'refinanciado'` (igual patrón que `/prestamos` y el dashboard), y la alerta "⚠️ N días sin corte" ya no se muestra en créditos unificados (no tiene sentido pedir un corte de interés sobre un crédito que ya no se cobra ahí).
+
+### Alcance y límites conocidos
+
+- **Mínimo 2 créditos**: si solo se quiere refinanciar uno, ya existen los flujos de "Refinanciar saldo" / "Refinanciar + prestar más" — unificar exige al menos 2 orígenes para tener sentido semántico.
+- **Movimiento de caja**: se registra el capital total como "desembolso" en `cred_movimientos_caja`, igual que cualquier refinanciación existente (aunque la mayor parte sea deuda consolidada y no dinero nuevo) — consistente con cómo ya se comporta el sistema, no es una particularidad de este módulo.

@@ -76,6 +76,11 @@ export async function POST(request, { params }) {
     const prod = prodRes.rows[0]
     if (prod.estado === 'saldado')
       return NextResponse.json({ error: 'El crédito ya está saldado' }, { status: 400 })
+    // Si este crédito fue absorbido por "Unificar Créditos" (ver CLAUDE.md
+    // §21), su capital pendiente ya se trasladó a un crédito nuevo — no se
+    // puede seguir abonando aquí, se duplicaría el cobro.
+    if (prod.estado === 'refinanciado')
+      return NextResponse.json({ error: 'Este crédito ya fue unificado en otro crédito — los abonos se registran allá' }, { status: 400 })
 
     // Capital pendiente actual
     const capRes = await query(

@@ -75,11 +75,16 @@ function PrestamosContent() {
 
   return (
     <div className="space-y-5">
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center flex-wrap gap-2">
         <h2 className="text-2xl font-bold text-gray-800">Préstamos</h2>
-        <Link href="/prestamos/nuevo" className="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700">
-          + Nuevo
-        </Link>
+        <div className="flex gap-2">
+          <Link href="/prestamos/unificar" className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">
+            🔗 Unificar créditos
+          </Link>
+          <Link href="/prestamos/nuevo" className="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700">
+            + Nuevo
+          </Link>
+        </div>
       </div>
 
       {/* Segmentador Clientes / Empresas */}

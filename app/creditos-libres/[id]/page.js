@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, use } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 
 const fmt     = v => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v ?? 0)
 // Siempre forzar mediodía local para evitar desfase UTC-5 (Colombia)
@@ -114,6 +115,9 @@ export default function DetalleCreditoLibrePage({ params }) {
   if (!credito) return null
 
   const saldado = credito.estado === 'saldado'
+  // "Unificar Créditos" (CLAUDE.md §21) puede consolidar créditos libres en
+  // un crédito nuevo — una vez unificado, ya no se puede seguir abonando aquí.
+  const unificado = credito.estado === 'refinanciado'
   const pct     = credito.monto_capital > 0
     ? Math.min(100, Math.round(credito.capital_pagado / credito.monto_capital * 100))
     : 0
@@ -129,7 +133,7 @@ export default function DetalleCreditoLibrePage({ params }) {
             <p className="text-sm text-gray-500">{credito.nombre_cliente} · CC {credito.documento}</p>
           </div>
         </div>
-        {!saldado && (
+        {!saldado && !unificado && (
           <button onClick={abrirModal}
             className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-blue-700 transition-colors text-sm">
             💰 Registrar abono
@@ -142,6 +146,19 @@ export default function DetalleCreditoLibrePage({ params }) {
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
           <p className="text-emerald-700 font-bold text-lg">✅ Crédito saldado</p>
           <p className="text-emerald-600 text-sm">El capital ha sido pagado en su totalidad</p>
+        </div>
+      )}
+      {unificado && credito.unificado_en && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-sm text-indigo-800 flex items-start gap-2.5">
+          <span className="text-lg leading-none">🔗</span>
+          <p className="flex-1">
+            <strong>Este crédito fue unificado</strong> junto con otros en el crédito{' '}
+            <Link href={`/prestamos/${credito.unificado_en.credito_nuevo_id}`} className="font-bold underline">
+              {credito.unificado_en.referencia || credito.unificado_en.credito_nuevo_id}
+            </Link>
+            , aportando <strong>{fmt(credito.unificado_en.capital_aportado)}</strong> de capital. Los abonos de aquí en adelante se
+            registran en ese crédito.
+          </p>
         </div>
       )}
 

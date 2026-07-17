@@ -7,6 +7,7 @@ const nav = [
   { href: '/',           label: 'Dashboard',  icon: '📊' },
   { href: '/clientes',   label: 'Clientes',   icon: '👥' },
   { href: '/prestamos',  label: 'Préstamos',  icon: '💰' },
+  { href: '/prestamos/unificar', label: 'Unificar Créditos', icon: '🔗' },
   { href: '/cobros',     label: 'Cobros',     icon: '💳' },
   { href: '/empenos',          label: 'Empeños',              icon: '🔒' },
   { href: '/creditos-libres',  label: 'Cred. Sin Cuotas',    icon: '📅' },
@@ -49,8 +50,11 @@ export default function Sidebar({ onClose }) {
 
       <nav className="flex-1 p-4 space-y-1">
         {nav.map(item => {
-          const active = pathname === item.href ||
-            (item.href !== '/' && pathname.startsWith(item.href))
+          // "/prestamos" no debe quedar resaltado a la vez que
+          // "/prestamos/unificar" cuando ambos comparten el mismo prefijo.
+          const otroMasEspecifico = item.href === '/prestamos' && pathname.startsWith('/prestamos/unificar')
+          const active = !otroMasEspecifico && (pathname === item.href ||
+            (item.href !== '/' && pathname.startsWith(item.href)))
           return (
             <Link key={item.href} href={item.href} onClick={onClose}
               className={`flex items-center gap-3 px-4 py-3 rounded-lg text-base font-medium transition-colors

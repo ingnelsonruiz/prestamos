@@ -33,8 +33,11 @@ export default function CreditosLibresPage() {
       || c.nombre_cliente?.toLowerCase().includes(q)
       || c.documento?.toLowerCase().includes(q)
       || c.referencia?.toLowerCase().includes(q)
+    // "Activos" excluye tanto saldados como los que ya fueron consolidados
+    // en otro crédito vía "Unificar Créditos" (estado='refinanciado' — ver
+    // CLAUDE.md §21): su capital ya no está pendiente aquí, se trasladó.
     const matchFiltro = filtro === 'todos'
-      || (filtro === 'activos'  && c.estado !== 'saldado')
+      || (filtro === 'activos'  && !['saldado', 'refinanciado'].includes(c.estado))
       || (filtro === 'saldados' && c.estado === 'saldado')
     return matchBuscar && matchFiltro
   })
@@ -60,7 +63,7 @@ export default function CreditosLibresPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-white border border-gray-200 rounded-xl p-4">
           <p className="text-xs text-gray-500">Créditos activos</p>
-          <p className="text-2xl font-bold text-blue-700">{creditos.filter(c => c.estado !== 'saldado').length}</p>
+          <p className="text-2xl font-bold text-blue-700">{creditos.filter(c => !['saldado', 'refinanciado'].includes(c.estado)).length}</p>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4">
           <p className="text-xs text-gray-500">Capital en calle</p>
@@ -132,7 +135,7 @@ export default function CreditosLibresPage() {
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${estadoBadge[c.estado] ?? 'bg-gray-100 text-gray-600'}`}>
                         {c.estado}
                       </span>
-                      {alertaDias && c.estado !== 'saldado' && (
+                      {alertaDias && !['saldado', 'refinanciado'].includes(c.estado) && (
                         <span className="bg-orange-100 text-orange-700 text-xs px-2 py-0.5 rounded-full">
                           ⚠️ {diasSinCorte} días sin corte
                         </span>
