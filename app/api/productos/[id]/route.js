@@ -14,6 +14,7 @@ export async function GET(request, { params }) {
               c.nombre AS nombre_cliente, c.documento,
               ep.nombre AS nombre_empresa, ep.codigo AS codigo_empresa, ep.nit AS nit_empresa,
               orig.id   AS refinancia_origen_id,
+              orig.referencia AS ref_origen,
               nuevo.id  AS refinancia_nuevo_id
        FROM ${S}.cred_productos p
        LEFT JOIN ${S}.cred_clientes c         ON c.id  = p.cliente_id

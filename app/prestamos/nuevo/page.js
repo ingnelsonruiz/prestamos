@@ -151,7 +151,7 @@ const init = {
   fecha_primer_pago:'', con_interes:true, metodo_calculo:'plano',
   cuota_inicial:'0', descripcion_bien:'', valor_comercial_bien:'', notas:'',
   metodo_desembolso:'efectivo', entidad_desembolso:'', referencia_desembolso:'',
-  interes_fijo:false,
+  interes_fijo:false, fecha_desembolso:'',
 }
 
 // Medios de entrega del dinero + configuración de campos por medio
@@ -186,9 +186,13 @@ function NuevoPrestamoContenido() {
   const frecuenciaPresel= searchParams.get('frecuencia') || ''
   const metodoPresel    = searchParams.get('metodo') || ''
   const cuotasPresel    = searchParams.get('cuotas') || ''
-  // Refinanciar el saldo de capital congelado Y sumarle dinero nuevo
-  // (inyección) en el mismo crédito: el capital final = saldo + inyección.
-  const inyeccionPresel = fijoPresel && searchParams.get('inyeccion') === '1'
+  // Refinanciar el saldo pendiente Y sumarle dinero nuevo (inyección) en el
+  // mismo crédito: el capital final = saldo + inyección. Funciona tanto para
+  // créditos con interés congelado (fijoPresel=true, tasa/periodo/método
+  // quedan bloqueados igual al original) como para créditos normales
+  // (fijoPresel=false, el usuario define tasa/periodo/método libremente,
+  // igual que en la refinanciación de saldo estándar).
+  const inyeccionPresel = searchParams.get('inyeccion') === '1'
   const [montoInyeccion, setMontoInyeccion] = useState('0')
 
   const [form, setForm] = useState({
@@ -235,9 +239,12 @@ function NuevoPrestamoContenido() {
       const activos = Array.isArray(data) ? data.filter(t => t.activo) : []
       setTiposList(activos)
     })
-    // Fecha primer pago = hoy + 1 mes por defecto
+    // Fecha primer pago = hoy + 1 mes por defecto; fecha de desembolso = hoy
+    // (editable — el operador la ajusta si registra el crédito días después
+    // del desembolso real).
     const d = new Date(); d.setMonth(d.getMonth()+1)
-    setForm(f => ({...f, fecha_primer_pago: d.toISOString().split('T')[0]}))
+    const hoy = new Date().toISOString().split('T')[0]
+    setForm(f => ({...f, fecha_primer_pago: d.toISOString().split('T')[0], fecha_desembolso: hoy}))
   }, [])
 
   // Si el tipo elegido (por el usuario o por la URL) es "congelación", bloquear
@@ -334,6 +341,10 @@ function NuevoPrestamoContenido() {
         cuota_inicial:         parseFloat(form.cuota_inicial||0),
         valor_comercial_bien:  parseFloat(form.valor_comercial_bien||0)||null,
         es_refinanciacion_de:  refinanciaId || null,
+        // Dinero nuevo inyectado en la refinanciación (botón "Refinanciar +
+        // prestar más"): se guarda aparte del total para poder reconstruir
+        // después "cuánto tenía de saldo" vs "cuánto le presté de más".
+        monto_inyectado:       inyeccionPresel ? (parseFloat(montoInyeccion) || 0) : 0,
         entidad_desembolso:    entidadFinal,
         es_prestamo_interno:   esInterno,
         empresa_id:            esInterno ? (form.empresa_id||null) : null,
@@ -377,7 +388,9 @@ function NuevoPrestamoContenido() {
               </p>
               <p className="text-white/75 text-xs mt-0.5">
                 {clienteRefin ? <strong className="text-white">{clienteRefin.nombre}</strong> : 'Crédito anterior'} — {inyeccionPresel
-                  ? <>el <strong className="text-white">saldo de capital</strong> pendiente se suma al <strong className="text-white">dinero nuevo</strong> que definas más abajo, en un solo crédito. Tasa, periodicidad y método quedan bloqueados igual al original, y el interés sigue <strong className="text-white">congelado</strong> sobre el capital total.</>
+                  ? (fijoPresel
+                      ? <>el <strong className="text-white">saldo de capital</strong> pendiente se suma al <strong className="text-white">dinero nuevo</strong> que definas más abajo, en un solo crédito. Tasa, periodicidad y método quedan bloqueados igual al original, y el interés sigue <strong className="text-white">congelado</strong> sobre el capital total.</>
+                      : <>el <strong className="text-white">saldo de capital</strong> pendiente (sin el interés aún no causado) se suma al <strong className="text-white">dinero nuevo</strong> que definas más abajo, en un solo crédito. Tasa, periodicidad, método y cuotas quedan libres para que las ajustes como cualquier refinanciación.</>)
                   : fijoPresel
                   ? <>solo el <strong className="text-white">saldo de capital</strong> pendiente pasa al nuevo crédito. Tasa, periodicidad y método quedan bloqueados igual al original y el interés sigue <strong className="text-white">congelado</strong> — solo defines el número de cuotas y la fecha.</>
                   : esCongelar
@@ -529,7 +542,9 @@ function NuevoPrestamoContenido() {
                 </p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs font-medium text-gray-600">Saldo a refinanciar (congelado)</label>
+                    <label className="text-xs font-medium text-gray-600">
+                      {fijoPresel ? 'Saldo a refinanciar (congelado)' : 'Saldo de capital a refinanciar'}
+                    </label>
                     <div className="mt-1 w-full border rounded-lg px-3 py-2 text-sm bg-white text-cyan-700 font-semibold select-none">
                       {fmt(parseFloat(capitalPresel)||0)}
                     </div>
@@ -544,7 +559,9 @@ function NuevoPrestamoContenido() {
                   <span className="text-lg font-black text-teal-800">{fmt(parseFloat(form.monto_capital)||0)}</span>
                 </div>
                 <p className="text-[11px] text-teal-600">
-                  El interés (congelado) se calculará sobre este capital total, no solo sobre el saldo refinanciado.
+                  {fijoPresel
+                    ? 'El interés (congelado) se calculará sobre este capital total, no solo sobre el saldo refinanciado.'
+                    : 'El interés se calculará sobre este capital total según la tasa y método que definas abajo.'}
                 </p>
               </div>
             ) : (
@@ -728,6 +745,21 @@ function NuevoPrestamoContenido() {
                 💸 ¿Cómo se entregó el dinero?
               </p>
               <div className="grid grid-cols-2 gap-3">
+                {/* Fecha real de entrega del dinero — editable, por si se
+                    registra el crédito días después del desembolso real.
+                    Distinta de "Fecha primer pago" (cuándo vence la 1ª cuota). */}
+                <div className="col-span-2">
+                  <label className="text-xs font-medium text-gray-600">📅 Fecha de desembolso *</label>
+                  <input type="date" required
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    value={form.fecha_desembolso}
+                    onChange={e=>set('fecha_desembolso', e.target.value)} />
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    {refinanciaId
+                      ? 'Fecha en que se le entregó el dinero nuevo al cliente (no la fecha en que registras el crédito). Ajústala si el registro se hace días después.'
+                      : 'Fecha en que se le entrega el dinero al cliente. Por defecto es hoy — ajústala si registras el crédito días después del desembolso real.'}
+                  </p>
+                </div>
                 <div className={form.metodo_desembolso === 'efectivo' ? 'col-span-2' : ''}>
                   <label className="text-xs font-medium text-gray-600">Medio de pago</label>
                   <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"

@@ -358,7 +358,7 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 | Método | Ruta | Notas |
 |--------|------|-------|
 | GET | `/api/productos?cliente_id=` | Incluye `telefono`, `direccion`, `ref_nuevo`, `ref_origen` (referencias de refinanciación). También `capital_pendiente_real` e `interes_pendiente` (desglose correcto; el `capital_pendiente` original mezcla capital+interés pese al nombre — ver §10 "Préstamos") |
-| POST | `/api/productos` | Fiado/adelanto: cuenta abierta. Otros: genera cuotas. Asigna `referencia` (CRED-XXXXXX) y `metodo_desembolso`. Snapshot de creación en `cred_historial_recalculos`. |
+| POST | `/api/productos` | Fiado/adelanto: cuenta abierta. Otros: genera cuotas. Asigna `referencia` (CRED-XXXXXX) y `metodo_desembolso`. Snapshot de creación en `cred_historial_recalculos`. Si `es_refinanciacion_de` viene con `monto_inyectado > 0` (refinanciación + dinero nuevo), lo persiste aparte del total (ver §19); se fuerza a 0 si el crédito no es una refinanciación. |
 | GET/PUT | `/api/productos/[id]` | |
 | POST | `/api/productos/[id]/liquidar` | Liquidación anticipada con valor acordado |
 
@@ -550,6 +550,8 @@ Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para 
 | `18_fix_cuotas_sobrepagadas.sql` | Corrige cuotas con `monto_pagado > monto_cuota` (excedente a capital): fija `monto_cuota = monto_pagado` y `abono_capital = monto_pagado − abono_interes`. Evita "saldo pendiente" negativo en el detalle. Idempotente |
 | `19_interes_fijo.sql` | Columna `cred_productos.interes_fijo BOOLEAN NOT NULL DEFAULT FALSE`. Interés congelado sobre capital original para créditos plano opt-in. |
 | `20_sin_cuotas_futuras.sql` | **Módulo Créditos Sin Cuotas Futuras**: (1) `ALTER TABLE cred_pagos ADD COLUMN IF NOT EXISTS fecha_corte_interes DATE NULL`; (2) elimina el CHECK de comportamientos en `cred_tipos_prestamo`; (3) inserta el tipo `credito_libre` (`comportamiento='sin_cuotas_futuras'`). Idempotente. **No es necesario ejecutarla manualmente** — `autoMigrar()` la ejecuta en cada llamada a los endpoints del módulo. |
+| `21_monto_inyectado.sql` | Columna `cred_productos.monto_inyectado NUMERIC NOT NULL DEFAULT 0`. Registra el dinero nuevo desembolsado en una refinanciación con inyección de capital ("Refinanciar + prestar más"), independiente del saldo que hizo rollover. Ver §19. |
+| `22_fecha_desembolso.sql` | Columna `cred_productos.fecha_desembolso DATE NULL`. Fecha real de entrega del dinero al cliente, editable por el usuario (distinta de `fecha_creacion`, automática). NULL en créditos anteriores — usar `fecha_creacion::date` como respaldo. Ver §19. |
 
 > **Convención de mora**: `cred_cuotas.estado` ∈ {`pendiente`,`parcial`,`pagada`}. La **mora NO es un estado almacenado**; se deriva por `fecha_vencimiento < CURRENT_DATE` en cada consulta (Cobros, dashboard, informes, listados de clientes/productos). El cargue inicial fija la mora solo a nivel de **producto** (`estado='en_mora'`), nunca en la cuota. **`cred_productos.estado` tampoco se re-evalúa después de creado** (ningún endpoint lo transiciona a `'en_mora'` salvo el cargue inicial), por lo que ningún filtro o vista debe usar `p.estado === 'en_mora'` para detectar mora real; usar siempre el conteo dinámico `cuotas_mora` que expone `GET /api/productos` (cuotas con `fecha_vencimiento < CURRENT_DATE`, `estado != 'pagada'` y `fecha_vencimiento <> '2099-12-31'`).
 >
@@ -811,3 +813,75 @@ El parámetro `?abrir=1` hace que la página de detalle inicialice `modalAbierto
 - NO llama a `POST /api/pagos`
 - NO toca `recalcularCuotasPlano`
 - Los créditos existentes (préstamos, fiados, empeños, etc.) no se ven afectados en ningún caso
+
+---
+
+## 19. Registro de Dinero Inyectado en Refinanciación — 2026-07-17
+
+Columna `cred_productos.monto_inyectado NUMERIC NOT NULL DEFAULT 0` (`21_monto_inyectado.sql`).
+
+**Problema que resuelve:** el botón **"💵 Refinanciar + prestar más"** (`/prestamos/[id]`, visible junto a "❄️ Refinanciar solo capital" cuando `puedeRefinanciarCapitalFijo`) permite refinanciar el saldo de capital congelado de un crédito **y** sumarle dinero nuevo en la misma operación. Hasta esta versión, `/prestamos/nuevo` calculaba `monto_capital = saldo_congelado + monto_inyeccion` (useEffect con `inyeccionPresel`) pero **solo enviaba el total combinado** a `POST /api/productos` — el monto de dinero nuevo (`montoInyeccion`, estado local del formulario) nunca viajaba al backend como campo propio. Quedaba mencionado únicamente dentro de `notas` (texto libre, editable, no consultable), por lo que no había forma confiable de reconstruir después "cuánto tenía de saldo el cliente" vs. "cuánto le presté de más y cuándo".
+
+**Implementación:**
+- `app/prestamos/nuevo/page.js` (`guardar()`): agrega al body del POST `monto_inyectado: inyeccionPresel ? (parseFloat(montoInyeccion) || 0) : 0`.
+- `app/api/productos/route.js` (POST): desestructura `monto_inyectado` del body y calcula `montoInyectadoSeguro` — se fuerza a `0` si el crédito **no** es una refinanciación (`es_refinanciacion_de` vacío), igual patrón de defensa en profundidad que `tasaSegura`/`interesFijoSeguro`. Se persiste en el INSERT de `cred_productos` y se incluye en el `detalle` de auditoría.
+- `app/api/productos/[id]/route.js` (GET): agrega `orig.referencia AS ref_origen` al JOIN existente con el crédito origen, para poder mostrar de qué crédito (`CRED-XXXXXX`) se refinanció.
+- `app/prestamos/[id]/page.js`: nuevo bloque informativo (fondo teal, ícono 💵) visible cuando `data.monto_inyectado > 0.5`, debajo de la nota de interés congelado. Muestra: crédito de origen (`ref_origen`), fecha de la operación (`fecha_creacion`), saldo que venía refinanciado (`monto_capital − monto_inyectado`), dinero nuevo prestado ese día (`monto_inyectado`) y capital total del crédito.
+
+**Cómo reconstruir el historial completo de inyecciones de un cliente:** cada crédito es un eslabón de la cadena `es_refinanciacion_de` / `refinanciado_por`. Sumando `monto_inyectado` de todos los créditos de un cliente (`SELECT SUM(monto_inyectado) FROM cred_productos WHERE cliente_id=$1`) se obtiene el total de dinero nuevo que ha recibido a través de todas sus refinanciaciones, sin depender de texto libre en `notas`.
+
+**Alcance de la migración:** columna con `DEFAULT 0` — cero impacto en créditos ya existentes ni en refinanciaciones sin inyección (`monto_inyectado` queda en 0, el bloque informativo simplemente no se muestra).
+
+**Mejora pendiente (no incluida en este cambio):** un resumen consolidado por cliente ("total inyectado históricamente") en `/clientes/[id]` o `/prestamos/[id]`, en vez de tener que revisar crédito por crédito la cadena de refinanciaciones.
+
+### Extensión — 2026-07-17: inyección también en créditos SIN interés congelado
+
+La primera versión de "Refinanciar + prestar más" solo estaba disponible para créditos con `interes_fijo=true` (junto a "❄️ Refinanciar solo capital", condicionado a `puedeRefinanciarCapitalFijo`). Se extendió para que **cualquier** crédito refinanciable pueda usar la misma mecánica, sin exigir interés congelado.
+
+- `app/prestamos/nuevo/page.js`: `inyeccionPresel` dejó de depender de `fijoPresel` (`searchParams.get('inyeccion') === '1'` a secas). Cuando `inyeccionPresel && !fijoPresel`, el bloque de capital ("Saldo de capital a refinanciar" + "💰 Dinero nuevo a prestar") se muestra igual, pero tasa/período/frecuencia/método/cuotas quedan **libres** (no se bloquean como en el caso de capital congelado) — se comporta como la refinanciación de saldo estándar, solo que con un campo adicional de dinero nuevo. El banner hero y los textos de ayuda distinguen ambos casos (`fijoPresel` true/false) para no hablar de "congelado" cuando no aplica.
+- `app/prestamos/[id]/page.js`: nueva variable `puedeInyectarNormal = !data.interes_fijo && saldoCapitalPendiente > 0.5 && !['saldado','refinanciado'].includes(data.estado)` y `urlRefinanciarNormalMasInyeccion` con `capital=Math.round(saldoCapitalPendiente)` (**no** `saldoPendiente`/`totalPendiente` — ver corrección abajo). Botón **"💵 Refinanciar + prestar más"** agregado en el header de la tabla de cuotas, junto a "Registrar cobro" — visible para cualquier crédito refinanciable que no tenga interés congelado (el caso congelado ya tiene su propio botón junto a la nota de interés fijo, sin cambios).
+- Backend (`POST /api/productos`) y persistencia de `monto_inyectado` no requirieron cambios: ya funcionaban para cualquier `es_refinanciacion_de`, sin importar `interes_fijo`.
+
+**Corrección (mismo día) — la base a refinanciar debe ser solo capital, no el saldo total:** la primera implementación de `urlRefinanciarNormalMasInyeccion` reutilizaba `urlRefinanciar` (capital = `saldoPendiente`/`totalPendiente`, que mezcla capital **e interés de cuotas aún no vencidas**). Esto habría recapitalizado interés todavía no causado junto con el dinero nuevo inyectado — un problema de anatocismo (interés sobre interés) y, en la práctica, un valor que no coincide con lo que el usuario necesita decirle al cliente ("tenías tanto de capital, te presté tanto más"). Se corrigió para usar `saldoCapitalPendiente` (solo capital, la misma variable que ya usaba la variante de capital congelado) como base, tanto en `puedeInyectarNormal` como en la URL. El interés pendiente de cuotas no vencidas del crédito original simplemente no viaja al nuevo crédito (igual que en la refinanciación de capital congelado) — es interés que aún no se ha devengado.
+
+### Fecha de desembolso editable — 2026-07-17
+
+Columna `cred_productos.fecha_desembolso DATE NULL` (`22_fecha_desembolso.sql`).
+
+**Problema que resuelve:** la única fecha disponible para "cuándo nació este crédito" era `fecha_creacion` (`TIMESTAMP DEFAULT CURRENT_TIMESTAMP`), fijada automáticamente por Postgres en el momento del INSERT — nunca editable desde el formulario. Si el operador registra el crédito uno o varios días después de haber entregado el dinero (dato tardío, corrección posterior), `fecha_creacion` queda con la fecha de captura en el sistema, no con la fecha real del desembolso. Esto es crítico en refinanciaciones con inyección de capital: el usuario necesita poder decirle después al cliente "tal día te desembolsé/inyecté tal valor" con la fecha correcta, no con la fecha en que tecleó el registro.
+
+**Implementación:**
+- `app/prestamos/nuevo/page.js`: nuevo campo **"📅 Fecha de desembolso"** (input `date`, requerido) en la sección "¿Cómo se entregó el dinero?", junto al medio de pago. Por defecto es hoy (seteado en el `useEffect` de montaje), pero el usuario puede cambiarlo. Aplica a **todos** los tipos de crédito (préstamo, refinanciación, fiado, adelanto, empeño, etc. — no solo al flujo de inyección), porque el problema (registro tardío) puede pasar en cualquier alta.
+- `app/api/productos/route.js` (POST): acepta `fecha_desembolso` del body; si no viene, hace fallback a "hoy" (`fechaDesembolsoSegura`). Se persiste tanto en la rama normal (préstamo/refinanciación/empeño/venta) como en la rama fiado/adelanto.
+- `app/prestamos/[id]/page.js`: helper `fechaDesembolsoStr`/`fechaDesembolsoObj` — usa `data.fecha_desembolso` si existe; si es un crédito anterior a esta migración (columna NULL), cae en `fecha_creacion::date` como respaldo. Construye la fecha con `'T12:00:00'` para evitar el desfase de un día por UTC (convención del sistema, ver §10). La etiqueta "Fecha del préstamo" en el encabezado y en la ficha de datos se renombró a **"Fecha de desembolso"**, y el bloque de dinero inyectado (§19 arriba) ahora usa esta fecha en vez de `fecha_creacion` directamente.
+
+**Alcance de la migración:** columna `NULL` por defecto — cero impacto en créditos existentes; simplemente muestran la fecha de respaldo (`fecha_creacion`) hasta que se edite ese registro o se cree uno nuevo.
+
+---
+
+## 20. Mejoras de UX — Cobros y claridad de capital pendiente — 2026-07-17
+
+### Modal de "Registrar pago" centrado (`/cobros`)
+
+**Problema:** el panel de registro de pago (`app/cobros/page.js`) era un bloque `sticky top-4 self-start` dentro de una columna lateral (`w-80 flex-shrink-0`), no un modal real. Al hacer clic en "Pagar" sobre un crédito que estaba varias filas más abajo en la lista, el panel aparecía anclado arriba a la derecha del viewport, desconectado visualmente de la fila que el usuario acababa de tocar — mala experiencia para quien registra los cobros a diario.
+
+**Fix:** se reemplazó por un modal real centrado, con el mismo patrón `fixed inset-0 bg-black/50 flex items-center justify-center z-50` que ya usan los demás modales del archivo (Arqueo del día, envío masivo por WhatsApp, etc.). La tarjeta usa `flex flex-col max-h-[90vh]`: cabecera fija, cuerpo con scroll interno (`overflow-y-auto flex-1`) y footer fijo con los botones **Cancelar/Confirmar pago** siempre visibles (antes quedaban dentro del área con scroll y podían quedar fuera de la vista). Ahora el modal aparece siempre centrado en pantalla sin importar el scroll o la posición del crédito en la lista.
+
+### Claridad de "cuánto capital debo" en la tabla de cuotas (`/prestamos/[id]`)
+
+**Problema:** la fila de TOTALES de la tabla de cuotas muestra en la columna Capital la suma de `abono_capital` de **todas** las cuotas (pagadas + pendientes) — es decir, el capital de todo el crédito, no lo que falta por cobrar. Un usuario mirando "$1.000.000" en esa columna no tenía forma de saber, sin hacer cuentas o abrir el bloque de interés congelado (que solo aparece si `interes_fijo=true`), cuánto capital real debía el cliente hoy.
+
+**Fix:** se agregó una segunda línea, siempre visible (no depende de `interes_fijo`), debajo del total de Capital en el `<tfoot>`: **"Debe de capital: `{fmt(saldoCapitalPendiente)}`"** (número en rojo, `text-sm font-bold`; etiqueta en `text-xs text-gray-500`), usando la misma variable `saldoCapitalPendiente` que ya alimenta la nota de interés congelado y la liquidación anticipada. Solo se muestra si `saldoCapitalPendiente > 0.5` (crédito no saldado en capital). Este es el patrón a replicar en cualquier vista nueva que muestre un total de capital "de todo el crédito": siempre acompañarlo de cuánto de ese capital sigue pendiente, para no dejarlo ambiguo.
+
+### Mensaje de WhatsApp del envío asistido — simplificado (`buildMensaje`, `/cobros`)
+
+**Problema:** el mensaje que arma `buildMensaje()` para el envío masivo por WhatsApp (botón "📤 Envío asistido" por tramo) mostraba demasiada información redundante por crédito: una línea "Saldo pendiente: $X" o, en cuotas del tramo, "Cuota #N (vencida el fecha): $total" seguida de "Capital: $A + Interés: $B" — y **además** una línea "Subtotal: $X" que repetía el mismo número ya mostrado arriba. Para un cliente con 2-3 créditos el mensaje se volvía largo y confuso, mezclando totales redundantes con el desglose real que el cliente necesita (cuánto es capital y cuánto es interés, y para cuándo).
+
+**Fix:** se simplificó `bloque()` dentro de `buildMensaje()` (`app/cobros/page.js`) a solo dos formatos, sin subtotales:
+- Crédito con cuota(s) en el tramo actual (`p.esTramo=true`): una línea por cuota — `Vencida {fecha}: Capital {monto} + Interés {monto}` (o solo Capital si no hay interés, ej. fiados). Se quitó el `Cuota #N` y el monto total de la cuota (ya se deduce de capital+interés).
+- Resto de créditos del cliente (`p.esTramo=false`, no es el foco de este tramo): se suma `capitalPend`/`interesPend` de **todas** sus cuotas pendientes y se muestra `Capital: {total} + Interés: {total}` — antes solo mostraba un "Saldo pendiente" sin desglosar.
+- Se eliminó la línea `Subtotal: {monto}` en ambos casos (quedaba duplicada con lo ya mostrado). El mensaje conserva el cierre `*Total que debe: {total}*` como único resumen numérico al final.
+
+**Ajuste de tono del cierre (mismo día):** a pedido del dueño del negocio, el cierre del mensaje se simplificó a un texto puramente informativo que invita al cliente a acercarse a pagar, en vez de agradecer compromiso/puntualidad por anticipado: `'Un pago puntual habla muy bien de usted. Le invitamos a acercarse para ponerse al día...'` (mora) / `'...Le invitamos a acercarse en la fecha indicada. Gracias.'` (hoy/mañana/semana/quince).
+
+**Retiro temporal de montos del mensaje (mismo día):** mientras se termina de afinar el cálculo de capital/interés pendiente (fuente de los valores que se venían mostrando), el negocio pidió que el mensaje de WhatsApp **no incluya ninguna cifra** — ni el desglose por cuota, ni el total. Se eliminó por completo el bloque `detalle` (la función `bloque()` y el `.map` sobre `cl.productos`) y la línea `*Total que debe: {total}*` de `buildMensaje()`. El mensaje quedó reducido a: saludo + una frase de contexto según el tramo (mora/hoy/mañana/otros, sin montos) + el cierre informativo de la sección anterior. `cl.productos`/`cl.total` se siguen calculando en `iniciarEnvio()` (se usan para filtrar clientes con deuda y para el contador interno "Cliente X de Y · {fmt(cur.total)}" que ve el cobrador en el modal — **ese** total es solo para uso interno del operador, no viaja al cliente). Cuando el cálculo de capital/interés quede validado, reintroducir el desglose es tan simple como restaurar el bloque `detalle` documentado arriba.

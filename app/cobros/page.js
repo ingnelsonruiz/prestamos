@@ -263,40 +263,22 @@ export default function CobrosPage() {
     k === 'manana' ? bucketDe.manana :
     k === 'semana' ? bucketDe.semana : bucketDe.quince
 
-  // Mensaje respetuoso que lista TODAS las deudas del cliente, agrupadas por crédito
+  // Mensaje puramente informativo — SIN montos ni desglose por ahora
+  // (a pedido del negocio, mientras se termina de afinar el cálculo de
+  // capital/interés). Solo avisa que hay un pago pendiente e invita a
+  // acercarse; no menciona cifras de ningún tipo.
   const buildMensaje = (tramoKey, cl) => {
-    const fmtFV = c => new Date(fvDe(c) + 'T12:00:00').toLocaleDateString('es-CO')
-    const bloque = p => {
-      const titulo = tipoLabel[p.tipo] || p.tipo
-      const desc   = p.descripcion ? ` — ${p.descripcion}` : ''
-      let ctxt
-      if (p.esTramo) {
-        // Crédito del tramo: solo la(s) cuota(s) a vencer, con capital e interés
-        ctxt = p.cuotas.map(c => {
-          const cap = capitalPend(c), int = interesPend(c)
-          const venc = esMora(c) ? `vencida el ${fmtFV(c)}` : `vence el ${fmtFV(c)}`
-          const desg = int > 0 ? `\n     Capital: ${fmt(cap)}  +  Interés: ${fmt(int)}` : ''
-          return `   - Cuota #${c.numero_cuota} (${venc}): ${fmt(pendiente(c))}${desg}`
-        }).join('\n')
-      } else {
-        // Otros créditos: solo el saldo pendiente, sin enumerar cuotas
-        ctxt = `   - Saldo pendiente: ${fmt(p.subtotal)}`
-      }
-      return `*${titulo}*${desc}\n${ctxt}\n   Subtotal: ${fmt(p.subtotal)}`
-    }
-    const detalle = cl.productos.map(bloque).join('\n\n')
-
     const intro = {
-      mora:     'De forma respetuosa le recordamos su estado de cuenta a la fecha:',
-      hoy_solo: 'Le recordamos amablemente su estado de cuenta. *Hoy* tiene un pago programado:',
-      manana:   'Un recordatorio cordial. *Mañana* tiene un pago programado. Este es su estado de cuenta:',
-    }[tramoKey] || 'Le recordamos con respeto su estado de cuenta y próximos pagos:'
+      mora:     'De forma respetuosa le recordamos que tiene pagos pendientes.',
+      hoy_solo: 'Le recordamos amablemente que *hoy* tiene un pago programado.',
+      manana:   'Un recordatorio cordial: *mañana* tiene un pago programado.',
+    }[tramoKey] || 'Le recordamos con respeto que tiene próximos pagos.'
 
     const cierre = tramoKey === 'mora'
-      ? 'Confiamos en su compromiso de ponerse al día. Si ya realizó el pago, por favor ignore este mensaje. Quedamos atentos para cualquier acuerdo. Muchas gracias.'
-      : 'Le agradecemos de antemano su puntualidad y compromiso. Quedamos atentos. Gracias.'
+      ? 'Un pago puntual habla muy bien de usted. Le invitamos a acercarse para ponerse al día. Si ya realizó el pago, por favor ignore este mensaje. Gracias.'
+      : 'Un pago puntual habla muy bien de usted. Le invitamos a acercarse en la fecha indicada. Gracias.'
 
-    return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. ${intro}\n\n${detalle}\n\n*Total que debe: ${fmt(cl.total)}*\n\n${cierre}`
+    return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. ${intro}\n\n${cierre}`
   }
 
   const iniciarEnvio = (tramoKey, tramoLabel) => {
@@ -1229,19 +1211,19 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
       </div>
     </div>{/* fin columna principal */}
 
-    {/* ── Panel lateral de pago (sticky, no solapa la tabla) ───────────── */}
+    {/* ── Modal de registro de pago (centrado, siempre visible sin importar el scroll) ── */}
     {modal && (
-      <div className="w-80 flex-shrink-0 sticky top-4 self-start">
-        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-sm flex flex-col max-h-[90vh]">
           {/* Cabecera */}
-          <div className="flex items-center justify-between px-5 py-3 bg-primary-600 text-white">
+          <div className="flex items-center justify-between px-5 py-3 bg-primary-600 text-white rounded-t-2xl flex-shrink-0">
             <h3 className="text-sm font-bold">
               {modal.tipo_producto === 'fiado' ? '🌿 Abono fiado' : '💳 Registrar pago'}
             </h3>
             <button onClick={() => setModal(null)} className="text-white/70 hover:text-white text-lg leading-none">✕</button>
           </div>
 
-          <div className="p-4 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto">
+          <div className="p-4 space-y-3 overflow-y-auto flex-1">
             {/* Info cliente + desglose */}
             <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
               <p><span className="text-gray-500">Cliente:</span> <strong>{modal.nombre_cliente}</strong></p>
@@ -1375,13 +1357,15 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
               <input type="text" className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
                 value={notas} onChange={e=>setNotas(e.target.value)} />
             </div>
-            <div className="flex gap-3 pt-1 pb-2">
-              <button onClick={() => setModal(null)} className="flex-1 border rounded-lg py-3 text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
-              <button onClick={registrarPago} disabled={loading}
-                className="flex-1 bg-primary-600 text-white rounded-lg py-3 text-sm font-medium hover:bg-primary-700 disabled:opacity-50">
-                {loading ? 'Guardando...' : 'Confirmar pago'}
-              </button>
-            </div>
+          </div>
+
+          {/* Footer fijo — Cancelar/Confirmar siempre visibles, sin necesidad de hacer scroll */}
+          <div className="flex gap-3 px-4 py-3 border-t flex-shrink-0">
+            <button onClick={() => setModal(null)} className="flex-1 border rounded-lg py-3 text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
+            <button onClick={registrarPago} disabled={loading}
+              className="flex-1 bg-primary-600 text-white rounded-lg py-3 text-sm font-medium hover:bg-primary-700 disabled:opacity-50">
+              {loading ? 'Guardando...' : 'Confirmar pago'}
+            </button>
           </div>
         </div>
       </div>

@@ -67,10 +67,24 @@ export async function POST(request) {
       frecuencia_cobro, num_cuotas, fecha_primer_pago, con_interes,
       metodo_calculo, cuota_inicial, descripcion_bien,
       valor_comercial_bien, fecha_limite_rescate, notas,
-      es_refinanciacion_de,
+      es_refinanciacion_de, monto_inyectado, fecha_desembolso,
       metodo_desembolso, entidad_desembolso, referencia_desembolso,
       es_prestamo_interno, empresa_id, interes_fijo,
     } = body
+
+    // Dinero nuevo desembolsado en una refinanciación con inyección de
+    // capital ("Refinanciar + prestar más"). Solo tiene sentido cuando el
+    // crédito es una refinanciación; en cualquier otro caso se fuerza a 0
+    // para no dejar el campo en un estado incoherente (defensa en
+    // profundidad, igual que tasaSegura/interesFijoSeguro más abajo).
+    const montoInyectadoSeguro = es_refinanciacion_de
+      ? Math.max(0, parseFloat(monto_inyectado) || 0)
+      : 0
+
+    // Fecha real de entrega del dinero al cliente. El usuario la puede
+    // ajustar en el formulario (registro tardío, backfill); si no la manda,
+    // se asume "hoy" en vez de dejarla nula.
+    const fechaDesembolsoSegura = fecha_desembolso || new Date().toISOString().split('T')[0]
 
     // Para préstamos internos (empresa propia) no se requiere cliente_id
     const esInterno = es_prestamo_interno === true
@@ -117,11 +131,11 @@ export async function POST(request) {
           `INSERT INTO ${S}.cred_productos
             (id,referencia,cliente_id,empresa_id,es_prestamo_interno,tipo,monto_capital,tasa_interes,num_cuotas,
              fecha_primer_pago,con_interes,metodo_calculo,descripcion_bien,notas,
-             metodo_desembolso,entidad_desembolso,referencia_desembolso)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,0,1,$8,false,'plano',$9,$10,$11,$12,$13) RETURNING *`,
+             metodo_desembolso,entidad_desembolso,referencia_desembolso,fecha_desembolso)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,0,1,$8,false,'plano',$9,$10,$11,$12,$13,$14) RETURNING *`,
           [id, referencia, cliente_id||null, esInterno?(empresa_id||null):null, esInterno,
            tipo, capital, fechaUso, descripcion_bien||null, notas||null,
-           medioDesemb, entidadDesemb, refDesemb]
+           medioDesemb, entidadDesemb, refDesemb, fechaDesembolsoSegura]
         )
         await q(
           `INSERT INTO ${S}.cred_cuotas
@@ -179,8 +193,9 @@ export async function POST(request) {
           frecuencia_cobro,num_cuotas,fecha_primer_pago,con_interes,
           metodo_calculo,cuota_inicial,descripcion_bien,
           valor_comercial_bien,fecha_limite_rescate,notas,es_refinanciacion_de,
-          metodo_desembolso,entidad_desembolso,referencia_desembolso,interes_fijo
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`,
+          metodo_desembolso,entidad_desembolso,referencia_desembolso,interes_fijo,
+          monto_inyectado,fecha_desembolso
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *`,
         [id, referencia, cliente_id, tipo, capitalFinanciar,
          tasaSegura, periodo_tasa||'mensual',
          frecuencia_cobro||'mensual', num_cuotas, fecha_primer_pago,
@@ -188,7 +203,8 @@ export async function POST(request) {
          cuota_inicial||0, descripcion_bien||null,
          valor_comercial_bien||null, fecha_limite_rescate||null, notas||null,
          es_refinanciacion_de||null,
-         medioDesemb, entidadDesemb, refDesemb, interesFijoSeguro]
+         medioDesemb, entidadDesemb, refDesemb, interesFijoSeguro,
+         montoInyectadoSeguro, fechaDesembolsoSegura]
       )
 
       if (es_refinanciacion_de) {
@@ -263,8 +279,10 @@ export async function POST(request) {
     // Auditoría fire-and-forget — no retrasa la respuesta al cliente
     const accion = es_refinanciacion_de ? ACCIONES.REFINANCIAR : ACCIONES.CREAR_PRESTAMO
     auditar({ ...u, accion, modulo: MODULOS.PRESTAMOS,
-      descripcion: (es_refinanciacion_de ? 'Refinancio' : 'Creo') + ' ' + tipo + ': $' + capitalFinanciar.toLocaleString() + ' — cliente ' + cliente_id,
-      detalle: { id, tipo, monto: capitalFinanciar, cliente_id, es_refinanciacion_de, metodo_desembolso: medioDesemb } })
+      descripcion: (es_refinanciacion_de ? 'Refinancio' : 'Creo') + ' ' + tipo + ': $' + capitalFinanciar.toLocaleString() +
+        (montoInyectadoSeguro > 0 ? ` (incluye $${montoInyectadoSeguro.toLocaleString()} de dinero nuevo inyectado)` : '') +
+        ' — cliente ' + cliente_id,
+      detalle: { id, tipo, monto: capitalFinanciar, monto_inyectado: montoInyectadoSeguro, fecha_desembolso: fechaDesembolsoSegura, cliente_id, es_refinanciacion_de, metodo_desembolso: medioDesemb } })
       .catch(err => console.error('[auditoría]', err.message))
 
     return NextResponse.json({ producto: prodRow, cuotas_generadas: cuotas.length }, { status: 201 })

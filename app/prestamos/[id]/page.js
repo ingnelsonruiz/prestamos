@@ -182,6 +182,16 @@ export default function DetallePrestamo() {
     }, 0) || 0
   const puedeEditar     = !data.tiene_pagos
 
+  // Fecha real de entrega del dinero (editable al crear el crédito, ver
+  // 22_fecha_desembolso.sql). Créditos anteriores a esa migración no la
+  // tienen — se usa fecha_creacion::date como respaldo. Se arma con
+  // 'T12:00:00' para evitar el desfase de un día por UTC (convención del
+  // sistema, ver CLAUDE.md §10).
+  const fechaDesembolsoStr = data.fecha_desembolso
+    ? String(data.fecha_desembolso).split('T')[0]
+    : (data.fecha_creacion ? String(data.fecha_creacion).split('T')[0] : null)
+  const fechaDesembolsoObj = fechaDesembolsoStr ? new Date(fechaDesembolsoStr + 'T12:00:00') : null
+
   // ── Score de comportamiento de pago ───────────────────────────────────────
   // Evaluar TODAS las cuotas con actividad (pagadas o parciales), independiente de fecha
   const calcularScore = () => {
@@ -247,6 +257,20 @@ export default function DetallePrestamo() {
   // Misma refinanciación de capital congelado, pero permitiendo sumar dinero
   // nuevo (inyección) al saldo — un solo crédito nuevo por el total.
   const urlRefinanciarMasInyeccion = `${urlRefinanciarCapitalFijo}&inyeccion=1`
+
+  // Refinanciar + prestar más para créditos SIN interés congelado: la base
+  // que se rueda al nuevo crédito es SOLO el capital pendiente
+  // (saldoCapitalPendiente), no el saldo total con interés (saldoPendiente).
+  // Igual que en la variante de capital congelado — el interés de las cuotas
+  // que aún no vencen no está "causado" todavía, así que no debe
+  // recapitalizarse junto con el dinero nuevo (evita cobrar interés sobre
+  // interés no devengado). Solo se define tasa/periodo/frecuencia/método
+  // libremente, a diferencia de la variante congelada que los bloquea.
+  const puedeInyectarNormal = !data.interes_fijo && saldoCapitalPendiente > 0.5
+    && !['saldado','refinanciado'].includes(data.estado)
+  const urlRefinanciarNormalMasInyeccion =
+    `/prestamos/nuevo?cliente=${data.cliente_id}&capital=${Math.round(saldoCapitalPendiente)}` +
+    `&refinancia=${id}&inyeccion=1`
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -388,9 +412,9 @@ export default function DetallePrestamo() {
           {/* Datos clave del préstamo en el encabezado */}
           <div className="flex flex-wrap gap-3 text-sm">
             <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-center">
-              <p className="text-xs text-gray-400">📅 Fecha del préstamo</p>
+              <p className="text-xs text-gray-400">📅 Fecha de desembolso</p>
               <p className="font-bold text-gray-800 mt-0.5">
-                {data.fecha_creacion ? new Date(data.fecha_creacion).toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '—'}
+                {fechaDesembolsoObj ? fechaDesembolsoObj.toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '—'}
               </p>
             </div>
             {data.metodo_desembolso && (
@@ -581,9 +605,9 @@ export default function DetallePrestamo() {
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 text-sm text-gray-600">
           <div className="bg-gray-50 rounded-lg px-3 py-2">
-            <p className="text-xs text-gray-400 mb-0.5">📅 Fecha del préstamo</p>
+            <p className="text-xs text-gray-400 mb-0.5">📅 Fecha de desembolso</p>
             <p className="font-bold text-gray-800">
-              {data.fecha_creacion ? new Date(data.fecha_creacion).toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'}) : '—'}
+              {fechaDesembolsoObj ? fechaDesembolsoObj.toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'}) : '—'}
             </p>
           </div>
           {data.metodo_desembolso && (
@@ -631,17 +655,29 @@ export default function DetallePrestamo() {
 
       {/* Tabla cuotas */}
       <div className="bg-white rounded-xl border overflow-hidden">
-        <div className="px-6 py-4 border-b flex justify-between items-center">
+        <div className="px-6 py-4 border-b flex justify-between items-center gap-3 flex-wrap">
           <h3 className="font-semibold text-gray-700">Tabla de cuotas</h3>
-          {['refinanciado','saldado'].includes(data.estado) ? (
-            <span className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 text-gray-400 cursor-not-allowed select-none" title={data.estado === 'refinanciado' ? 'Crédito refinanciado — los cobros se registran en el nuevo crédito' : 'Crédito saldado'}>
-              Registrar cobro
-            </span>
-          ) : (
-            <Link href="/cobros" className="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700">
-              Registrar cobro
-            </Link>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Inyectar dinero nuevo también en créditos SIN interés congelado
+                (para los congelados, el mismo botón ya existe más abajo, junto
+                a la nota de interés fijo). */}
+            {puedeInyectarNormal && (
+              <Link href={urlRefinanciarNormalMasInyeccion}
+                title="Refinancia el saldo pendiente y súmale dinero nuevo en un solo crédito"
+                className="inline-flex items-center gap-1.5 text-sm bg-teal-600 text-white px-3 py-1.5 rounded-lg hover:bg-teal-700 transition-colors">
+                💵 Refinanciar + prestar más
+              </Link>
+            )}
+            {['refinanciado','saldado'].includes(data.estado) ? (
+              <span className="text-sm px-3 py-1.5 rounded-lg bg-gray-100 text-gray-400 cursor-not-allowed select-none" title={data.estado === 'refinanciado' ? 'Crédito refinanciado — los cobros se registran en el nuevo crédito' : 'Crédito saldado'}>
+                Registrar cobro
+              </span>
+            ) : (
+              <Link href="/cobros" className="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700">
+                Registrar cobro
+              </Link>
+            )}
+          </div>
         </div>
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-500 uppercase text-xs">
@@ -702,6 +738,16 @@ export default function DetallePrestamo() {
               </td>
               <td className="px-4 py-3 text-right text-blue-700">
                 {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_capital||0), 0) || 0)}
+                {/* Aclaración: el total de arriba es el capital de TODO el
+                    crédito (pagado + pendiente) — lo que realmente falta por
+                    cobrar de capital hoy es saldoCapitalPendiente. Sin esta
+                    línea, el usuario no tenía forma de saber cuánto capital
+                    real debe el cliente con solo mirar la tabla. */}
+                {saldoCapitalPendiente > 0.5 && (
+                  <div className="text-xs font-normal text-gray-500 mt-0.5 whitespace-nowrap">
+                    Debe de capital: <span className="text-red-600 font-bold text-sm">{fmt(saldoCapitalPendiente)}</span>
+                  </div>
+                )}
               </td>
               <td className="px-4 py-3 text-right text-orange-600">
                 {fmt(data.cuotas?.reduce((s,c) => s + parseFloat(c.abono_interes||0), 0) || 0)}
@@ -748,6 +794,31 @@ export default function DetallePrestamo() {
                   </Link>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Historial de inyección de capital: si este crédito nació de un
+            "Refinanciar + prestar más", deja constancia de cuánto era saldo
+            que venía del crédito anterior vs. cuánto fue dinero nuevo
+            prestado ese día — para poder decirle al cliente "tenías tanto,
+            te presté tanto más". */}
+        {Number(data.monto_inyectado) > 0.5 && (
+          <div className="px-6 py-4 bg-teal-50 border-t border-teal-200 text-sm text-teal-800 flex items-start gap-2.5">
+            <span className="text-lg leading-none">💵</span>
+            <div className="flex-1">
+              <p>
+                <strong>Este crédito incluye dinero nuevo inyectado</strong> al refinanciar
+                {data.ref_origen ? <> el crédito <strong>{data.ref_origen}</strong></> : ' un crédito anterior'} el{' '}
+                <strong>
+                  {fechaDesembolsoObj ? fechaDesembolsoObj.toLocaleDateString('es-CO', {day:'2-digit', month:'long', year:'numeric'}) : '—'}
+                </strong>:
+              </p>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2 text-sm">
+                <span>Saldo que venía refinanciado: <strong>{fmt(Number(data.monto_capital) - Number(data.monto_inyectado))}</strong></span>
+                <span>Dinero nuevo prestado ese día: <strong className="text-teal-900">{fmt(Number(data.monto_inyectado))}</strong></span>
+                <span>Capital total del crédito: <strong>{fmt(Number(data.monto_capital))}</strong></span>
+              </div>
             </div>
           </div>
         )}
