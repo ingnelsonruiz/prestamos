@@ -115,12 +115,19 @@ export default function CreditosLibresPage() {
           {filtrados.map(c => {
             const diasSinCorte = parseInt(c.dias_sin_corte ?? 0)
             const alertaDias   = diasSinCorte > 30
+            // Interés mensual aproximado — misma fórmula que /creditos-libres/[id]
+            const factorMes = c.periodo_tasa === 'diario'    ? 1/30
+                             : c.periodo_tasa === 'semanal'   ? 7/30
+                             : c.periodo_tasa === 'quincenal' ? 15/30
+                             : c.periodo_tasa === 'anual'     ? 360/30
+                             : 1
+            const interesMensual = parseFloat(c.monto_capital) * (parseFloat(c.tasa_interes) / 100) / factorMes
             return (
               <Link key={c.id} href={`/creditos-libres/${c.id}`}
                 className="block bg-white border border-gray-200 rounded-xl p-4 hover:border-blue-400 hover:shadow-sm transition-all">
-                <div className="flex items-start justify-between gap-4">
-                  {/* Info cliente */}
-                  <div className="flex-1 min-w-0">
+                <div className="flex items-start gap-4 flex-wrap lg:flex-nowrap">
+                  {/* Info cliente — ancho fijo, ya NO es flex-1 (eso dejaba el hueco en blanco) */}
+                  <div className="w-full lg:w-56 shrink-0 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-gray-900 truncate">{c.nombre_cliente}</span>
                       <span className="text-xs text-gray-400">CC {c.documento}</span>
@@ -146,19 +153,39 @@ export default function CreditosLibresPage() {
                     )}
                   </div>
 
-                  {/* Montos */}
-                  <div className="text-right shrink-0">
+                  {/* Detalles del crédito — flex-1: reparte los 5 datos a lo ancho de todo el espacio disponible */}
+                  <div className="flex-1 min-w-0 flex flex-wrap items-start justify-between gap-x-4 gap-y-2 text-xs sm:border-l sm:border-r sm:border-gray-100 sm:px-5">
+                    <div>
+                      <p className="text-gray-400">Capital desembolsado</p>
+                      <p className="font-semibold text-gray-700">{fmt(c.monto_capital)}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">Tasa de interés</p>
+                      <p className="font-semibold text-gray-700">{c.tasa_interes}% {c.periodo_tasa}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">Interés mensual aprox.</p>
+                      <p className="font-semibold text-gray-700">{fmt(interesMensual)}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">Fecha de inicio</p>
+                      <p className="font-semibold text-gray-700">{fmtDate(c.fecha_inicio_credito || c.fecha_creacion)}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">Último corte de intereses</p>
+                      <p className="font-semibold text-gray-700">
+                        {c.ultima_fecha_corte ? fmtDate(c.ultima_fecha_corte) : '— Sin cortes aún'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Montos — ancho fijo */}
+                  <div className="w-full lg:w-40 shrink-0 text-right">
                     <p className="text-sm text-gray-500">Capital pendiente</p>
                     <p className="text-lg font-bold text-gray-900">{fmt(c.capital_pendiente)}</p>
-                    <p className="text-xs text-gray-400">
-                      Tasa {c.tasa_interes}% {c.periodo_tasa}
-                    </p>
                     <p className="text-xs text-emerald-600 mt-0.5">
                       Intereses cobrados: {fmt(c.intereses_pagados)}
                     </p>
-                    {c.ultima_fecha_corte && (
-                      <p className="text-xs text-gray-400">Último corte: {fmtDate(c.ultima_fecha_corte)}</p>
-                    )}
                   </div>
                 </div>
               </Link>

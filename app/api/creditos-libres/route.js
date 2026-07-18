@@ -65,6 +65,8 @@ export async function GET(request) {
         p.id, p.referencia, p.cliente_id, p.monto_capital, p.tasa_interes,
         p.periodo_tasa, p.estado, p.fecha_creacion, p.descripcion_bien, p.notas,
         p.metodo_desembolso, p.entidad_desembolso, p.referencia_desembolso,
+        -- fecha_inicio real = fecha_primer_pago (lo que ingresó el usuario en el form)
+        COALESCE(p.fecha_primer_pago, p.fecha_creacion::DATE) AS fecha_inicio_credito,
         c.nombre  AS nombre_cliente,
         c.documento,
         c.telefono,

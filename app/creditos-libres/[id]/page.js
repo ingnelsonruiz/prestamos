@@ -32,7 +32,8 @@ export default function DetalleCreditoLibrePage({ params }) {
   // Modal de abono — se abre automáticamente si viene ?abrir=1 (desde Cobros)
   const [modalAbierto, setModalAbierto] = useState(searchParams.get('abrir') === '1')
   const [tipoAbono,    setTipoAbono]    = useState('interes')     // 'interes'|'capital'|'ambos'
-  const [fechaCorte,   setFechaCorte]   = useState(todayStr())
+  const [fechaAbono,   setFechaAbono]   = useState(todayStr())     // fecha real en que se recibe el pago
+  const [fechaCorte,   setFechaCorte]   = useState(todayStr())     // fecha hasta la cual se calcula interés
   const [calcReady,    setCalcReady]    = useState(null)           // resultado del cálculo
   const [calculando,   setCalculando]   = useState(false)
   const [montoInteres, setMontoInteres] = useState('')
@@ -72,6 +73,7 @@ export default function DetalleCreditoLibrePage({ params }) {
 
   const abrirModal = () => {
     setTipoAbono('interes')
+    setFechaAbono(todayStr())
     setFechaCorte(todayStr())
     setMontoInteres('')
     setMontoCapital('')
@@ -93,6 +95,7 @@ export default function DetalleCreditoLibrePage({ params }) {
         body: JSON.stringify({
           tipo_abono:    tipoAbono,
           fecha_corte:   (tipoAbono === 'interes' || tipoAbono === 'ambos') ? fechaCorte : undefined,
+          fecha_pago:    fechaAbono,
           monto_interes: parseFloat(montoInteres || 0),
           monto_capital: parseFloat(montoCapital || 0),
           metodo_pago:   metodoPago,
@@ -427,6 +430,18 @@ export default function DetalleCreditoLibrePage({ params }) {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                {/* Fecha de abono — fecha real en que se recibe el pago (independiente de la fecha de corte) */}
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Fecha de abono *
+                  </label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Fecha en que se recibe el pago. No tiene que coincidir con la fecha de corte de intereses.
+                  </p>
+                  <input type="date" value={fechaAbono} onChange={e => setFechaAbono(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
 
                 {/* Selector de fecha de corte (interés / ambos) */}

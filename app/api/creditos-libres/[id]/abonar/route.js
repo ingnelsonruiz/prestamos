@@ -25,14 +25,17 @@ export async function POST(request, { params }) {
   try {
     await autoMigrar()
     const { id }  = await params
-    const [body, u] = await Promise.all([
+    const [body, u, modoPruebaRes] = await Promise.all([
       request.json(),
       getUsuarioDesdeRequest(request),
+      query(`SELECT valor FROM ${S}.cred_configuracion WHERE clave='modo_prueba'`),
     ])
+    const modoPrueba = modoPruebaRes.rows[0]?.valor === 'true'
 
     const {
       tipo_abono,        // 'interes' | 'capital' | 'ambos'
-      fecha_corte,       // YYYY-MM-DD — requerido cuando tipo_abono incluye interés
+      fecha_corte,       // YYYY-MM-DD — requerido cuando tipo_abono incluye interés (calcula el interés)
+      fecha_pago,        // YYYY-MM-DD — fecha real en que se recibe el pago (independiente de fecha_corte)
       monto_interes,     // número ≥ 0
       monto_capital,     // número ≥ 0
       metodo_pago,
@@ -60,6 +63,10 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: 'La fecha de corte es requerida para abonar a intereses' }, { status: 400 })
     if (fecha_corte && !/^\d{4}-\d{2}-\d{2}$/.test(fecha_corte))
       return NextResponse.json({ error: 'Formato de fecha_corte inválido. Use YYYY-MM-DD' }, { status: 400 })
+    if (fecha_pago && !/^\d{4}-\d{2}-\d{2}$/.test(fecha_pago))
+      return NextResponse.json({ error: 'Formato de fecha_pago inválido. Use YYYY-MM-DD' }, { status: 400 })
+    if (!modoPrueba && fecha_pago && fecha_pago > new Date().toISOString().split('T')[0])
+      return NextResponse.json({ error: 'La fecha de abono no puede ser mayor a la fecha actual' }, { status: 400 })
 
     // ── Verificar producto ───────────────────────────────────────────────────
     const prodRes = await query(
@@ -126,6 +133,9 @@ export async function POST(request, { params }) {
 
     const pagoId    = uuidv4()
     const montoTotal = montoInt + montoCap
+    // Fecha real del abono (independiente de fecha_corte). Convención del sistema:
+    // forzar mediodía local para evitar desfase UTC-5 (ver CLAUDE.md §10/§18).
+    const fechaReal = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()
 
     // Descripción del abono para notas automáticas
     const tipoDesc = tipo_abono === 'interes' ? 'Abono a intereses'
@@ -146,12 +156,13 @@ export async function POST(request, { params }) {
          fecha_corte_interes)
        VALUES ($1,$2,$3,
                (SELECT cliente_id FROM ${S}.cred_productos WHERE id=$3),
-               $4,$5,$6,NOW(),$7,$8,$9,$10,$11)`,
+               $4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [
         pagoId,
         prod.cuota_placeholder_id,
         id,
         montoTotal, montoInt, montoCap,
+        fechaReal,
         metodo,
         notasCompletas,
         numeroRecibo,
@@ -212,7 +223,7 @@ export async function POST(request, { params }) {
       accion:        ACCIONES.PAGAR,
       modulo:        'creditos_libres',
       descripcion:   `${tipoDesc} ${prod.referencia} — ${numeroRecibo} — $${montoTotal}`,
-      detalle:       { pagoId, tipo_abono, montoInt, montoCap, fecha_corte },
+      detalle:       { pagoId, tipo_abono, montoInt, montoCap, fecha_corte, fecha_pago },
       request,
     })
 

@@ -981,3 +981,23 @@ Como un `credito_libre` puede terminar unificado (estado `refinanciado`), el mó
 - El segmento inicial (`Clientes`/`Empresas`/`Todos`) se fuerza a `'todos'` cuando llega el deep-link, porque el crédito de origen puede ser de un cliente o de una empresa interna y el segmento por defecto (`'clientes'`) lo dejaría fuera de `grupos` sin poder encontrarlo nunca.
 
 **Patrón a replicar:** cualquier botón nuevo que redirija desde el detalle de un crédito hacia `/cobros` para cobrar debería usar este mismo `?producto_id=`, en vez de enlazar a `/cobros` sin contexto.
+
+---
+
+## 23. Créditos Sin Cuotas Futuras — Ficha de lista completa y Fecha de abono independiente — 2026-07-18
+
+### Ficha de lista (`/creditos-libres`) con datos completos del crédito
+
+**Problema:** cada fila de la lista (`app/creditos-libres/page.js`) dejaba un espacio vacío grande entre el bloque de datos del cliente (izquierda) y el bloque de montos (derecha), porque el `flex-1` del bloque izquierdo reservaba todo el ancho sobrante sin contenido que lo ocupara.
+
+**Fix:** se agregó un bloque central (`grid grid-cols-2`) con: Capital desembolsado (`monto_capital`), Tasa de interés, Interés mensual aprox. (misma fórmula que la ficha de detalle, ver §18) y Fecha de inicio / Último corte de intereses. Se removieron los duplicados de tasa/último corte del bloque de montos (derecha), que ahora solo muestra Capital pendiente e Intereses cobrados. `GET /api/creditos-libres` (lista) ahora también expone `fecha_inicio_credito` (`COALESCE(p.fecha_primer_pago, p.fecha_creacion::DATE)`), igual que ya hacía el detalle (`GET /api/creditos-libres/[id]`), para que la tarjeta muestre la fecha de inicio real y no la de creación en BD.
+
+### Fecha de abono independiente de la Fecha de corte (modal "Registrar abono")
+
+**Problema:** el modal de abono (`app/creditos-libres/[id]/page.js`) solo tenía un campo de fecha — "Fecha de corte" — que servía únicamente para calcular el interés del período, pero el pago siempre se registraba con `NOW()` en el backend (`app/api/creditos-libres/[id]/abonar/route.js`). No había forma de indicar que el abono se recibió/registró en una fecha distinta a la fecha de corte (por ejemplo, registro tardío de un pago), a diferencia del flujo normal de cuotas (`POST /api/pagos`), que sí acepta `fecha_pago` y respeta `modo_prueba`.
+
+**Fix:**
+- Frontend: nuevo campo **"Fecha de abono"** (input `date`, siempre visible sin importar el tipo de abono), independiente del campo "Fecha de corte" (que solo aparece para tipo `interes`/`ambos`). Ambas fechas pueden diferir libremente — no hay validación cruzada entre ellas.
+- Backend (`abonar/route.js`): acepta `fecha_pago` del body, valida formato `YYYY-MM-DD` y — igual que `POST /api/pagos` — consulta `cred_configuracion.clave='modo_prueba'` y rechaza fechas futuras salvo que el modo prueba esté activo. Se calcula `fechaReal = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()` (convención de mediodía local del sistema) y se persiste en `cred_pagos.fecha_pago` en vez de `NOW()`. Si no se envía `fecha_pago`, cae en el comportamiento anterior (fecha/hora actual del servidor).
+
+**Alcance:** cambio aislado al módulo Créditos Sin Cuotas Futuras — no toca `lib/calculos.js` ni `/api/pagos`.
