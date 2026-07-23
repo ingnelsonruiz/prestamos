@@ -48,6 +48,7 @@ function CobrosContent() {
   const [historialPagos, setHistorialPagos] = useState({})  // keyed by producto_id
   const [alertaRefinanciar, setAlertaRefinanciar] = useState(null) // { productoId, capitalPendiente, nombreCliente }
   const [envio, setEnvio] = useState(null) // { tramoKey, tramoLabel, lista:[...], idx, enviados:{} }
+  const [cargandoEnvio, setCargandoEnvio] = useState(false) // true mientras se busca el último pago de cada crédito para el mensaje
   // Si viene un deep-link de producto_id, arrancar en 'todos' — el crédito
   // podría ser de un cliente o de una empresa interna, y el segmento por
   // defecto ('clientes') lo dejaría fuera de `grupos` sin encontrarlo nunca.
@@ -296,10 +297,13 @@ function CobrosContent() {
     k === 'manana' ? bucketDe.manana :
     k === 'semana' ? bucketDe.semana : bucketDe.quince
 
-  // Mensaje puramente informativo — SIN montos ni desglose por ahora
-  // (a pedido del negocio, mientras se termina de afinar el cálculo de
-  // capital/interés). Solo avisa que hay un pago pendiente e invita a
-  // acercarse; no menciona cifras de ningún tipo.
+  const fmtFechaCorta = s => s ? new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
+
+  // Mensaje con el mismo detalle que ya trae el recibo impreso (REC-XXXXXX):
+  // capital prestado, saldo de capital pendiente y último pago (monto + fecha),
+  // por cada crédito del cliente. Reintroducido a pedido del negocio (antes se
+  // había retirado toda cifra del mensaje — ver CLAUDE.md §20 — mientras se
+  // afinaba el cálculo; ahora se usa el mismo dato que ya se ve en /recibos).
   const buildMensaje = (tramoKey, cl) => {
     const intro = {
       mora:     'De forma respetuosa le recordamos que tiene pagos pendientes.',
@@ -311,10 +315,20 @@ function CobrosContent() {
       ? 'Un pago puntual habla muy bien de usted. Le invitamos a acercarse para ponerse al día. Si ya realizó el pago, por favor ignore este mensaje. Gracias.'
       : 'Un pago puntual habla muy bien de usted. Le invitamos a acercarse en la fecha indicada. Gracias.'
 
-    return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. ${intro}\n\n${cierre}`
+    const detalle = cl.productos.map(p => {
+      const linea1 = `📌 ${tipoLabel[p.tipo] || p.tipo}${p.descripcion ? ' — ' + p.descripcion : ''}`
+      const linea2 = `   Capital prestado: ${fmt(p.capital || 0)}`
+      const linea3 = `   Saldo de capital: ${fmt(p.saldoCapital || 0)}`
+      const linea4 = p.ultimoPago
+        ? `   Último pago: ${fmt(p.ultimoPago.monto)} el ${fmtFechaCorta(p.ultimoPago.fecha)}`
+        : `   Último pago: sin pagos registrados aún`
+      return [linea1, linea2, linea3, linea4].join('\n')
+    }).join('\n\n')
+
+    return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. ${intro}\n\n${detalle}\n\n${cierre}`
   }
 
-  const iniciarEnvio = (tramoKey, tramoLabel) => {
+  const iniciarEnvio = async (tramoKey, tramoLabel) => {
     const arr = bucketPorKey(tramoKey)
     // ¿La cuota cae en el tramo activo?
     const enTramo = c => {
@@ -328,7 +342,7 @@ function CobrosContent() {
     }
     // Clientes que tienen algo en este tramo
     const ids = [...new Set(arr.map(c => c.cliente_id))]
-    const lista = ids.map(cid => {
+    const listaBase = ids.map(cid => {
       // TODOS los créditos pendientes de ese cliente, agrupados por producto
       const gs  = grupos.filter(g => g.cuotas[0]?.cliente_id === cid)
       const ref = gs[0]
@@ -338,18 +352,48 @@ function CobrosContent() {
         // Crédito del tramo → solo sus cuotas del tramo; otros créditos → todo su saldo
         const relevantes  = esTramo ? tramoCuotas : g.cuotas
         return {
+          producto_id: g.producto_id,
           tipo: g.tipo, descripcion: g.descripcion, esTramo,
           cuotas: relevantes,
           subtotal: relevantes.reduce((s, c) => s + pendiente(c), 0),
+          // Capital prestado (original) y saldo de capital pendiente real —
+          // mismo par de cifras que ya muestra el recibo impreso.
+          capital: parseFloat(g.capital || 0),
+          saldoCapital: g.cuotas.reduce((s, c) => s + capitalPend(c), 0),
         }
       }).filter(p => p.subtotal > 0.5)
       const total = productos.reduce((s, p) => s + p.subtotal, 0)
-      const cl = { cliente_id: cid, nombre: ref?.nombre_cliente, telefono: ref?.telefono, productos, total }
-      return { ...cl, mensaje: buildMensaje(tramoKey, cl) }
+      return { cliente_id: cid, nombre: ref?.nombre_cliente, telefono: ref?.telefono, productos, total }
     })
     .filter(cl => cl.productos.length > 0)
-    .sort((a, b) => (b.telefono ? 1 : 0) - (a.telefono ? 1 : 0) || (a.nombre || '').localeCompare(b.nombre || ''))
-    if (lista.length === 0) return
+
+    if (listaBase.length === 0) return
+
+    setCargandoEnvio(true)
+    // Traer el último pago (monto + fecha) de cada crédito para incluirlo en
+    // el mensaje — reutiliza el historial ya cacheado (historialPagos) si el
+    // acordeón de ese crédito ya se había abierto antes, para no repetir fetch.
+    await Promise.all(
+      listaBase.flatMap(cl => cl.productos).map(async p => {
+        try {
+          const cache = historialPagos[p.producto_id]
+          const pagos = cache
+            ? cache.pagos
+            : await fetch(`/api/historial?producto_id=${p.producto_id}`)
+                .then(r => r.json())
+                .then(d => Array.isArray(d.pagos) ? d.pagos : [])
+          const ultimo = [...pagos].sort((a, b) => new Date(b.fecha_pago) - new Date(a.fecha_pago))[0]
+          p.ultimoPago = ultimo ? { fecha: ultimo.fecha_pago, monto: parseFloat(ultimo.monto || 0) } : null
+        } catch {
+          p.ultimoPago = null
+        }
+      })
+    )
+    setCargandoEnvio(false)
+
+    const lista = listaBase
+      .map(cl => ({ ...cl, mensaje: buildMensaje(tramoKey, cl) }))
+      .sort((a, b) => (b.telefono ? 1 : 0) - (a.telefono ? 1 : 0) || (a.nombre || '').localeCompare(b.nombre || ''))
     setEnvio({ tramoKey, tramoLabel, lista, idx: 0, enviados: {} })
     setCopiado(false)
   }
@@ -615,13 +659,16 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
           ].map(b => {
             const n = new Set(b.arr.map(c => c.cliente_id)).size
             return (
-              <button key={b.k} disabled={n === 0} onClick={() => iniciarEnvio(b.k, b.l)}
+              <button key={b.k} disabled={n === 0 || cargandoEnvio} onClick={() => iniciarEnvio(b.k, b.l)}
                 className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebe5d] disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors">
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413z"/></svg>
                 {b.l} <span className="opacity-80">({n})</span>
               </button>
             )
           })}
+          {cargandoEnvio && (
+            <span className="text-xs text-gray-400 flex items-center gap-1">⏳ Preparando mensajes (buscando últimos pagos)...</span>
+          )}
         </div>
       </div>
 
