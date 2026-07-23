@@ -91,6 +91,29 @@ function EstadoCard({ label, icono, capital, count, bg, border, text, filtro }) 
   )
 }
 
+/* ─── Tarjeta: Créditos Sin Cuotas en mora (días sin corte, no fecha de vencim.) ── */
+function MoraLibresCard({ cantidad, totalAdeudado, umbralDias, onDoubleClick }) {
+  return (
+    <div
+      className="bg-rose-50 border border-rose-200 rounded-xl p-4 cursor-pointer select-none
+        transition-transform hover:scale-[1.02] active:scale-[0.98]"
+      onDoubleClick={onDoubleClick}
+      title="Doble clic para ver el detalle"
+    >
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-lg">📅⚠️</span>
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-rose-50 border border-rose-200 text-rose-700">
+          {cantidad} crédito{cantidad !== 1 ? 's' : ''}
+        </span>
+      </div>
+      <p className="text-[11px] uppercase tracking-wide font-semibold text-rose-700 opacity-70">Cred. Sin Cuotas en mora</p>
+      <p className="text-lg font-black text-rose-700 mt-0.5">{fmt(totalAdeudado)}</p>
+      <p className="text-[10px] text-rose-700 opacity-50">total que deben: capital pendiente + interés causado</p>
+      <p className="text-[10px] mt-1 text-rose-700 opacity-40">↗ doble clic para ver · +{umbralDias} días sin corte</p>
+    </div>
+  )
+}
+
 /* ─── Componente principal ────────────────────────────────────────────────── */
 export default function Dashboard() {
   const router = useRouter()
@@ -116,6 +139,9 @@ export default function Dashboard() {
   const [modalCapital, setModalCapital] = useState(false)
   const [detalleCapital, setDetalleCapital] = useState(null)
   const [cargandoCapital, setCargandoCapital] = useState(false)
+
+  // Modal detalle Créditos Sin Cuotas en mora (viene embebido en /api/dashboard, sin fetch aparte)
+  const [modalMoraLibres, setModalMoraLibres] = useState(false)
 
   const abrirDetalleCapital = async () => {
     setModalCapital(true)
@@ -175,7 +201,11 @@ export default function Dashboard() {
   if (!data)       return <div className="text-gray-400 p-6 text-center">Cargando dashboard…</div>
   if (data.error)  return <div className="text-red-600 p-4 bg-red-50 rounded-lg">❌ Error BD: {data.error}</div>
 
-  const { cartera, intereses, mora, recaudo, cartera_vencida, capital, cuotas_hoy, cuotas_semana, empenos_vencer, otros_rubros = [], creditos_libres = {} } = data
+  const { cartera, intereses, mora, recaudo, cartera_vencida, capital, cuotas_hoy, cuotas_semana, empenos_vencer, otros_rubros = [], creditos_libres = {}, creditos_libres_mora = {} } = data
+  const cantidadMoraLibres     = creditos_libres_mora.cantidad ?? 0
+  const totalAdeudadoMoraLibres = creditos_libres_mora.total_adeudado ?? 0
+  const umbralDiasMoraLibres    = creditos_libres_mora.umbral_dias ?? 30
+  const detalleMoraLibres       = creditos_libres_mora.detalle ?? []
 
   const roi = recaudo.total > 0
     ? ((intereses.total / (recaudo.total - intereses.total)) * 100).toFixed(1)
@@ -259,7 +289,7 @@ export default function Dashboard() {
       {/* ═══ FILA 2 — Estado de cartera por tipo ═══ */}
       <div>
         <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">Estado de la cartera</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <EstadoCard
             label="Créditos activos"   icono="✅"
             capital={cartera.capital_activo}      count={cartera.num_activos}
@@ -283,6 +313,12 @@ export default function Dashboard() {
             capital={cartera.capital_refinanciado} count={cartera.num_refinanciados}
             bg="bg-purple-50" border="border-purple-200" text="text-purple-700"
             filtro="refinanciado"
+          />
+          <MoraLibresCard
+            cantidad={cantidadMoraLibres}
+            totalAdeudado={totalAdeudadoMoraLibres}
+            umbralDias={umbralDiasMoraLibres}
+            onDoubleClick={() => setModalMoraLibres(true)}
           />
         </div>
       </div>
@@ -756,6 +792,82 @@ export default function Dashboard() {
                       </td>
                       <td className="px-3 pt-3 text-right text-base font-black text-[#1a4a7a]">
                         {fmt(detalleCapital.reduce((s, d) => s + d.capital_pendiente, 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal detalle Créditos Sin Cuotas en mora */}
+      {modalMoraLibres && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setModalMoraLibres(false) }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b rounded-t-2xl bg-rose-600">
+              <div>
+                <h3 className="text-white font-bold text-lg">Créditos Sin Cuotas en mora</h3>
+                <p className="text-rose-100 text-xs mt-0.5">
+                  Más de {umbralDiasMoraLibres} días sin corte de intereses (no tienen fecha de vencimiento fija —
+                  la mora se mide desde el último corte, o desde el inicio si nunca se ha cobrado)
+                </p>
+              </div>
+              <button onClick={() => setModalMoraLibres(false)}
+                className="text-white/80 hover:text-white text-2xl leading-none font-bold px-2">x</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {detalleMoraLibres.length === 0 && (
+                <div className="text-center text-gray-400 py-12">Sin créditos sin cuotas en mora</div>
+              )}
+              {detalleMoraLibres.length > 0 && (
+                <table className="w-full text-sm border-separate border-spacing-y-1">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wide text-gray-400">
+                      <th className="text-left px-3 py-2">Cliente</th>
+                      <th className="text-left px-3 py-2">Crédito</th>
+                      <th className="text-center px-3 py-2">Días sin corte</th>
+                      <th className="text-right px-3 py-2">Capital pendiente</th>
+                      <th className="text-right px-3 py-2">Interés causado</th>
+                      <th className="text-right px-3 py-2 text-rose-600">Total que debe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalleMoraLibres.map(d => (
+                      <tr key={d.producto_id} className="bg-gray-50 hover:bg-rose-50 rounded-lg transition-colors">
+                        <td className="px-3 py-2 rounded-l-lg">
+                          <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-rose-700 hover:underline block">{d.nombre_cliente}</a>
+                          <span className="text-[11px] text-gray-400">{d.documento}</span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <a href={'/creditos-libres/' + d.producto_id} className="text-cyan-600 hover:underline font-mono text-xs">{d.referencia}</a>
+                          <span className="block text-[11px] text-gray-400">{d.tasa_interes}% {d.periodo_tasa}</span>
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="font-bold text-orange-600">{d.dias_sin_corte}d</span>
+                          <span className="block text-[10px] text-gray-400">desde {fmtFecha(d.inicio_periodo)}</span>
+                        </td>
+                        <td className="px-3 py-2 text-right text-gray-700 font-semibold">{fmt(d.capital_pendiente)}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 font-semibold">{fmt(d.interes_causado)}</td>
+                        <td className="px-3 py-2 text-right rounded-r-lg font-bold text-rose-600">{fmt(d.total_adeudado)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan="3" className="px-3 pt-3 text-sm font-semibold text-gray-600">
+                        Total ({detalleMoraLibres.length} crédito{detalleMoraLibres.length !== 1 ? 's' : ''})
+                      </td>
+                      <td className="px-3 pt-3 text-right text-sm font-bold text-gray-700">
+                        {fmt(detalleMoraLibres.reduce((s, d) => s + d.capital_pendiente, 0))}
+                      </td>
+                      <td className="px-3 pt-3 text-right text-sm font-bold text-gray-700">
+                        {fmt(detalleMoraLibres.reduce((s, d) => s + d.interes_causado, 0))}
+                      </td>
+                      <td className="px-3 pt-3 text-right text-base font-black text-rose-600">
+                        {fmt(detalleMoraLibres.reduce((s, d) => s + d.total_adeudado, 0))}
                       </td>
                     </tr>
                   </tfoot>

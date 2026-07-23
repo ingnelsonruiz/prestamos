@@ -31,6 +31,16 @@ function calcInteresCL(capitalPendiente, tasa, periodTasa, inicioStr, hastaStr) 
   return capitalPendiente * (tasa / 100 / diasBase) * dias
 }
 
+// Días calendario reales (no 30/360) entre dos fechas "YYYY-MM-DD..." — misma
+// convención que ya usa GET /api/creditos-libres para "dias_sin_corte"
+// (CURRENT_DATE - COALESCE(ultima_fecha_corte, fecha_primer_pago)).
+const UMBRAL_MORA_LIBRES_DIAS = 30
+function diasCalendario(desdeStr, hastaStr) {
+  const d1 = new Date(desdeStr.slice(0, 10) + 'T00:00:00Z')
+  const d2 = new Date(hastaStr.slice(0, 10) + 'T00:00:00Z')
+  return Math.round((d2 - d1) / 86400000)
+}
+
 export async function GET(request) {
   try {
     const hoy = new Date().toISOString().split('T')[0]
@@ -357,10 +367,12 @@ export async function GET(request) {
           p.periodo_tasa,
           c.nombre            AS nombre_cliente,
           c.id                AS cliente_id,
+          c.documento,
           (p.monto_capital - COALESCE(cap.capital_pagado, 0)) AS capital_pendiente,
           COALESCE(
             MAX(pg.fecha_corte_interes)::text,
-            p.fecha_primer_pago::text
+            p.fecha_primer_pago::text,
+            p.fecha_creacion::date::text
           ) AS inicio_periodo
         FROM ${S}.cred_productos p
         LEFT JOIN ${S}.cred_clientes c ON c.id = p.cliente_id
@@ -373,7 +385,8 @@ export async function GET(request) {
         WHERE p.tipo = 'credito_libre'
           AND p.estado NOT IN ('saldado','refinanciado','decomisado')
         GROUP BY p.id, p.referencia, p.tasa_interes, p.periodo_tasa,
-                 c.nombre, c.id, p.monto_capital, cap.capital_pagado, p.fecha_primer_pago
+                 c.nombre, c.id, c.documento, p.monto_capital, cap.capital_pagado,
+                 p.fecha_primer_pago, p.fecha_creacion
         ORDER BY nombre_cliente
       `),
     ])
@@ -386,6 +399,49 @@ export async function GET(request) {
     const cv = carteraVencida.rows[0]
     const cl = creditosLibresCapital.rows[0]
     const il = creditosLibresIntereses.rows[0]
+
+    // ── Créditos Sin Cuotas Futuras EN MORA ─────────────────────────────────
+    // Este módulo no tiene fecha de vencimiento (cuota placeholder a 2099-12-31),
+    // así que la mora NO se puede detectar por fecha_vencimiento como los créditos
+    // normales (Query 1/3/5). Se usa la misma convención que ya expone
+    // GET /api/creditos-libres y el alertado de /creditos-libres (CLAUDE.md §18):
+    // "días sin corte" = hoy − (última fecha_corte_interes registrada, o el inicio
+    // del crédito si nunca se ha cobrado interés). Umbral de mora: > 30 días sin
+    // corte — el mismo que ya usa la alerta visual de la lista, para no introducir
+    // un criterio de negocio nuevo.
+    // "Total que deben" = capital pendiente + interés causado (30/360) desde ese
+    // punto de partida hasta HOY — no hasta una fecha final (el crédito no tiene),
+    // igual fórmula que usa calcInteresCL para proyecciones, solo que aquí el
+    // corte es siempre "hoy" en vez de un rango elegido por el usuario.
+    const creditosLibresMora = { cantidad: 0, capital_pendiente: 0, interes_causado: 0, total_adeudado: 0, umbral_dias: UMBRAL_MORA_LIBRES_DIAS, detalle: [] }
+    for (const row of creditosLibresDetalle.rows) {
+      const capital = parseFloat(row.capital_pendiente)
+      if (capital <= 0.5 || !row.inicio_periodo) continue
+      const diasSinCorte = diasCalendario(row.inicio_periodo, hoy)
+      if (diasSinCorte <= UMBRAL_MORA_LIBRES_DIAS) continue
+      const tasa = parseFloat(row.tasa_interes)
+      const interesCausado = calcInteresCL(capital, tasa, row.periodo_tasa, row.inicio_periodo, hoy)
+      const totalAdeudado = capital + interesCausado
+      creditosLibresMora.cantidad += 1
+      creditosLibresMora.capital_pendiente += capital
+      creditosLibresMora.interes_causado += interesCausado
+      creditosLibresMora.total_adeudado += totalAdeudado
+      creditosLibresMora.detalle.push({
+        producto_id:      row.id,
+        referencia:       row.referencia,
+        nombre_cliente:   row.nombre_cliente,
+        cliente_id:       row.cliente_id,
+        documento:        row.documento,
+        tasa_interes:     tasa,
+        periodo_tasa:     row.periodo_tasa,
+        dias_sin_corte:   diasSinCorte,
+        inicio_periodo:   row.inicio_periodo,
+        capital_pendiente: capital,
+        interes_causado:  interesCausado,
+        total_adeudado:   totalAdeudado,
+      })
+    }
+    creditosLibresMora.detalle.sort((a, b) => b.dias_sin_corte - a.dias_sin_corte)
 
     // Calcular interés proyectado de créditos libres usando 30/360.
     // Requiere AMBAS fechas: usa `desde` como inicio del período (no el último corte
@@ -485,6 +541,10 @@ export async function GET(request) {
         capital_pendiente: parseFloat(cl.capital_pendiente || 0),
         intereses_cobrados: parseFloat(il.total || 0),
       },
+      // Créditos Sin Cuotas Futuras en mora (> 30 días sin corte de intereses).
+      // Ver nota arriba: no existe fecha de vencimiento en este módulo, por eso
+      // la mora se define por "días sin corte", no por fecha.
+      creditos_libres_mora: creditosLibresMora,
       // KPIs históricos globales (informes). Congelación excluida del capital.
       kpis: {
         total_invertido:  parseFloat(kpisGlobales.rows[0].total_invertido),
