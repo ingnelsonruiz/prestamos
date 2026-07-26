@@ -5,8 +5,8 @@ import * as XLSX from 'xlsx'
 
 const fmt = v => new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(v)
 
-const tipoIcon  = { prestamo:'💰', venta:'🛍', empeno:'🔒', fiado:'🌿', adelanto:'🤝' }
-const tipoLabel = { prestamo:'Préstamo', venta:'Venta crédito', empeno:'Empeño', fiado:'Fiado finca', adelanto:'Adelanto' }
+const tipoIcon  = { prestamo:'💰', venta:'🛍', empeno:'🔒', fiado:'🌿', adelanto:'🤝', credito_libre:'📅' }
+const tipoLabel = { prestamo:'Préstamo', venta:'Venta crédito', empeno:'Empeño', fiado:'Fiado finca', adelanto:'Adelanto', credito_libre:'Crédito Sin Cuotas' }
 
 // Wrapper requerido por Next.js 15: useSearchParams debe estar dentro de <Suspense>
 export default function CobrosPage() {
@@ -47,8 +47,11 @@ function CobrosContent() {
   const [loadingArqueo, setLoadingArqueo] = useState(false)
   const [historialPagos, setHistorialPagos] = useState({})  // keyed by producto_id
   const [alertaRefinanciar, setAlertaRefinanciar] = useState(null) // { productoId, capitalPendiente, nombreCliente }
-  const [envio, setEnvio] = useState(null) // { tramoKey, tramoLabel, lista:[...], idx, enviados:{} }
-  const [cargandoEnvio, setCargandoEnvio] = useState(false) // true mientras se busca el último pago de cada crédito para el mensaje
+  const [envio, setEnvio] = useState(null) // { tramoKey, tramoLabel, lista:[...], abiertos:{}, enviados:{} }
+  const envioRef = useRef(null) // espejo síncrono de `envio`, para leer el estado más reciente dentro de cargarUltimoPagoCliente
+  useEffect(() => { envioRef.current = envio }, [envio])
+  const [filtroEnvio, setFiltroEnvio] = useState('pendientes') // 'todos' | 'pendientes' | 'enviados' — dentro del acordeón de envío
+  const [copiadoCid, setCopiadoCid] = useState(null) // cliente_id recién copiado, para feedback visual en su tarjeta
   // Si viene un deep-link de producto_id, arrancar en 'todos' — el crédito
   // podría ser de un cliente o de una empresa interna, y el segmento por
   // defecto ('clientes') lo dejaría fuera de `grupos` sin encontrarlo nunca.
@@ -171,6 +174,7 @@ function CobrosContent() {
   const fvDe   = c => c.fecha_vencimiento?.split('T')[0]
   const enRuta = c => { const fv = fvDe(c); return fv && fv !== '2099-12-31' }   // excluye cuentas abiertas (fiado/adelanto)
   const diasDesde = c => Math.round((new Date(hoy+'T12:00:00') - new Date(fvDe(c)+'T12:00:00')) / 86400000)
+  const esCreditoLibre = c => c.tipo_producto === 'credito_libre'
 
   // Desglose pendiente de una cuota: el pago se aplica primero a intereses
   const interesBase    = c => parseFloat(c.abono_interes || 0)
@@ -244,6 +248,16 @@ function CobrosContent() {
   const sumPend   = arr => arr.reduce((s,c) => s + pendiente(c), 0)
   const nClientes = arr => new Set(arr.map(c => c.cliente_id)).size
 
+  // Créditos Sin Cuotas Futuras (credito_libre) usan una cuota placeholder a
+  // 2099-12-31 (§18 CLAUDE.md) — `enRuta` los excluye de TODOS los tramos de
+  // la Brújula, así que sus clientes nunca entraban al WhatsApp masivo aunque
+  // tuvieran saldo pendiente real. Se agregan aparte, solo al tramo "Vencidas"
+  // del envío de WhatsApp (se tratan como deuda pendiente permanente, sin
+  // fecha de vencimiento formal). No se tocan bucketDe.vencidas ni la tarjeta
+  // KPI / Excel de "Vencidas": mostrar ahí una fecha 2099 no tendría sentido.
+  const cuotasCreditoLibrePendientes = todasCuotas.filter(c => esCreditoLibre(c) && pendiente(c) > 0.5)
+  const bucketVencidasWA = [...bucketDe.vencidas, ...cuotasCreditoLibrePendientes]
+
   // ─── Exportar la ruta de cobro a un libro Excel con varias hojas ──────────
   const exportarRuta = () => {
     const wb = XLSX.utils.book_new()
@@ -292,7 +306,7 @@ function CobrosContent() {
   // ─── ENVÍO ASISTIDO DE WHATSAPP (masivo, cliente por cliente) ─────────────
   const EMPRESA = '*Inversiones Hnos Liñán*'
   const bucketPorKey = k =>
-    k === 'mora'   ? bucketDe.vencidas :
+    k === 'mora'   ? bucketVencidasWA :
     k === 'hoy_solo' ? bucketDe.hoy :
     k === 'manana' ? bucketDe.manana :
     k === 'semana' ? bucketDe.semana : bucketDe.quince
@@ -316,19 +330,26 @@ function CobrosContent() {
       : 'Un pago puntual habla muy bien de usted. Le invitamos a acercarse en la fecha indicada. Gracias.'
 
     const detalle = cl.productos.map(p => {
-      const linea1 = `📌 ${tipoLabel[p.tipo] || p.tipo}${p.descripcion ? ' — ' + p.descripcion : ''}`
+      // El cliente nunca debe ver que es un "crédito sin cuotas futuras" — se
+      // muestra como un crédito normal, igual que cualquier otro tipo.
+      const labelMsg = p.tipo === 'credito_libre' ? 'Crédito' : (tipoLabel[p.tipo] || p.tipo)
+      const linea1 = `📌 ${labelMsg}${p.descripcion ? ' — ' + p.descripcion : ''}`
       const linea2 = `   Capital prestado: ${fmt(p.capital || 0)}`
       const linea3 = `   Saldo de capital: ${fmt(p.saldoCapital || 0)}`
+      // ultimoPago: undefined = aún no se consultó (carga perezosa al abrir la
+      // tarjeta), null = ya se consultó y no tiene pagos, objeto = sí tiene.
       const linea4 = p.ultimoPago
         ? `   Último pago: ${fmt(p.ultimoPago.monto)} el ${fmtFechaCorta(p.ultimoPago.fecha)}`
-        : `   Último pago: sin pagos registrados aún`
+        : p.ultimoPago === null
+          ? `   Último pago: sin pagos registrados aún`
+          : `   Último pago: consultando...`
       return [linea1, linea2, linea3, linea4].join('\n')
     }).join('\n\n')
 
     return `Hola *${cl.nombre}*\n\nLe saludamos de ${EMPRESA}. ${intro}\n\n${detalle}\n\n${cierre}`
   }
 
-  const iniciarEnvio = async (tramoKey, tramoLabel) => {
+  const iniciarEnvio = (tramoKey, tramoLabel) => {
     const arr = bucketPorKey(tramoKey)
     // ¿La cuota cae en el tramo activo?
     const enTramo = c => {
@@ -363,49 +384,84 @@ function CobrosContent() {
         }
       }).filter(p => p.subtotal > 0.5)
       const total = productos.reduce((s, p) => s + p.subtotal, 0)
-      return { cliente_id: cid, nombre: ref?.nombre_cliente, telefono: ref?.telefono, productos, total }
+      // Solo para uso interno del cobrador (ver badge en el modal de envío) —
+      // NUNCA se usa dentro de `buildMensaje`, que es lo que ve el cliente.
+      const tieneCreditoSinFecha = productos.some(p => p.tipo === 'credito_libre')
+      return { cliente_id: cid, nombre: ref?.nombre_cliente, telefono: ref?.telefono, productos, total, tieneCreditoSinFecha }
     })
     .filter(cl => cl.productos.length > 0)
 
     if (listaBase.length === 0) return
 
-    setCargandoEnvio(true)
-    // Traer el último pago (monto + fecha) de cada crédito para incluirlo en
-    // el mensaje — reutiliza el historial ya cacheado (historialPagos) si el
-    // acordeón de ese crédito ya se había abierto antes, para no repetir fetch.
-    await Promise.all(
-      listaBase.flatMap(cl => cl.productos).map(async p => {
-        try {
-          const cache = historialPagos[p.producto_id]
-          const pagos = cache
-            ? cache.pagos
-            : await fetch(`/api/historial?producto_id=${p.producto_id}`)
-                .then(r => r.json())
-                .then(d => Array.isArray(d.pagos) ? d.pagos : [])
-          const ultimo = [...pagos].sort((a, b) => new Date(b.fecha_pago) - new Date(a.fecha_pago))[0]
-          p.ultimoPago = ultimo ? { fecha: ultimo.fecha_pago, monto: parseFloat(ultimo.monto || 0) } : null
-        } catch {
-          p.ultimoPago = null
-        }
-      })
-    )
-    setCargandoEnvio(false)
-
+    // El "último pago" de cada crédito (para completar el mensaje) YA NO se
+    // trae aquí para los 155+ clientes del tramo de una sola vez — eso es lo
+    // que colgaba el botón varios segundos/minutos (un fetch por cada crédito
+    // de cada cliente antes de poder mostrar la lista). Ahora se muestra el
+    // acordeón al instante con "consultando..." y `cargarUltimoPagoCliente`
+    // trae el dato solo del cliente que el cobrador realmente abre.
     const lista = listaBase
       .map(cl => ({ ...cl, mensaje: buildMensaje(tramoKey, cl) }))
       .sort((a, b) => (b.telefono ? 1 : 0) - (a.telefono ? 1 : 0) || (a.nombre || '').localeCompare(b.nombre || ''))
-    setEnvio({ tramoKey, tramoLabel, lista, idx: 0, enviados: {} })
+    // Acordeón: en vez de forzar un recorrido secuencial, el cobrador ve la
+    // lista completa del tramo y decide a qué cliente le abre WhatsApp y en
+    // qué orden. `abiertos` guarda qué tarjetas están expandidas; `enviados`
+    // se marca al hacer clic en "Abrir WhatsApp" (o manualmente si no hay tel).
+    setEnvio({ tramoKey, tramoLabel, lista, enviados: {}, abiertos: {} })
+    setFiltroEnvio('pendientes')
     setCopiado(false)
   }
 
-  const avanzarEnvio = (marcado) => {
+  // Expande/colapsa la tarjeta de un cliente dentro del acordeón de envío.
+  // Al abrir, dispara la carga perezosa de su "último pago" (ver más abajo).
+  const toggleEnvioAbierto = (cid) => {
+    setEnvio(e => e && ({ ...e, abiertos: { ...e.abiertos, [cid]: !e.abiertos[cid] } }))
+    cargarUltimoPagoCliente(cid)
+  }
+
+  // Trae el "último pago" de cada crédito de UN solo cliente (no de los 155+
+  // del tramo) y reconstruye su mensaje. Reutiliza `historialPagos` si ese
+  // crédito ya se consultó antes (main list o esta misma función). No repite
+  // la consulta si el cliente ya quedó resuelto (evita refetch al reabrir).
+  const cargandoUltimoPagoRef = useRef(new Set())
+  const cargarUltimoPagoCliente = async (cid) => {
+    if (cargandoUltimoPagoRef.current.has(cid)) return
+    const clActual = envioRef.current?.lista.find(x => x.cliente_id === cid)
+    if (!clActual || clActual.productos.every(p => p.ultimoPago !== undefined)) return
+    cargandoUltimoPagoRef.current.add(cid)
+
+    await Promise.all(clActual.productos.map(async p => {
+      if (p.ultimoPago !== undefined) return
+      try {
+        const cache = historialPagos[p.producto_id]
+        const pagos = cache
+          ? cache.pagos
+          : await fetch(`/api/historial?producto_id=${p.producto_id}`)
+              .then(r => r.json())
+              .then(d => Array.isArray(d.pagos) ? d.pagos : [])
+        const ultimo = [...pagos].sort((a, b) => new Date(b.fecha_pago) - new Date(a.fecha_pago))[0]
+        p.ultimoPago = ultimo ? { fecha: ultimo.fecha_pago, monto: parseFloat(ultimo.monto || 0) } : null
+      } catch {
+        p.ultimoPago = null
+      }
+    }))
+
     setEnvio(e => {
       if (!e) return e
-      const cur = e.lista[e.idx]
-      const enviados = marcado && cur ? { ...e.enviados, [cur.cliente_id]: true } : e.enviados
-      return { ...e, idx: e.idx + 1, enviados }
+      const lista = e.lista.map(x => x.cliente_id === cid ? { ...x, mensaje: buildMensaje(e.tramoKey, x) } : x)
+      return { ...e, lista }
     })
-    setCopiado(false)
+  }
+
+  // Marca (o desmarca) un cliente como "enviado" — se dispara al abrir
+  // WhatsApp, o manualmente para clientes sin teléfono / marcado de reversa
+  const marcarEnviado = (cid, valor = true) => {
+    setEnvio(e => {
+      if (!e) return e
+      const enviados = { ...e.enviados }
+      if (valor) enviados[cid] = true
+      else delete enviados[cid]
+      return { ...e, enviados }
+    })
   }
 
   const abrirModal = (c, montoInicial) => {
@@ -651,7 +707,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
         <div className="flex flex-wrap items-center gap-2 mt-4 bg-white rounded-xl p-3 shadow-sm">
           <span className="text-gray-600 text-xs font-semibold flex items-center gap-1">📲 WhatsApp masivo:</span>
           {[
-            { k:'mora',     l:'Vencidas', arr: bucketDe.vencidas },
+            { k:'mora',     l:'Vencidas', arr: bucketVencidasWA },
             { k:'hoy_solo', l:'Hoy',      arr: bucketDe.hoy },
             { k:'manana',   l:'Mañana',   arr: bucketDe.manana },
             { k:'semana',   l:'7 días',   arr: bucketDe.semana },
@@ -659,16 +715,13 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
           ].map(b => {
             const n = new Set(b.arr.map(c => c.cliente_id)).size
             return (
-              <button key={b.k} disabled={n === 0 || cargandoEnvio} onClick={() => iniciarEnvio(b.k, b.l)}
+              <button key={b.k} disabled={n === 0} onClick={() => iniciarEnvio(b.k, b.l)}
                 className="flex items-center gap-1.5 bg-[#25D366] hover:bg-[#1ebe5d] disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors">
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413z"/></svg>
                 {b.l} <span className="opacity-80">({n})</span>
               </button>
             )
           })}
-          {cargandoEnvio && (
-            <span className="text-xs text-gray-400 flex items-center gap-1">⏳ Preparando mensajes (buscando últimos pagos)...</span>
-          )}
         </div>
       </div>
 
@@ -1663,16 +1716,26 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
       </div>
     )}
 
-    {/* ── Modal: envío asistido de WhatsApp (masivo) ── */}
+    {/* ── Modal: envío asistido de WhatsApp (masivo) — acordeón ──────────────
+        Antes forzaba un recorrido secuencial (un cliente a la vez, "Abrir
+        WhatsApp y siguiente"). Ahora se ve la lista completa del tramo como
+        acordeón: cada tarjeta muestra el/los tipo(s) de crédito del cliente
+        (diferenciando "Sin fecha fija" para credito_libre) y el cobrador
+        decide libremente a quién y en qué orden le abre WhatsApp. Al hacer
+        clic en "Abrir WhatsApp" queda marcado como enviado (con opción de
+        desmarcar). El mensaje en sí no cambia — sigue sin mencionar el tipo
+        de crédito distinto. */}
     {envio && (() => {
       const total     = envio.lista.length
       const enviadosN = Object.keys(envio.enviados).length
-      const terminado = envio.idx >= total
-      const cur       = terminado ? null : envio.lista[envio.idx]
-      const tel       = cur?.telefono ? cur.telefono.replace(/\D/g, '') : ''
+      const visibles  = envio.lista.filter(cl => {
+        if (filtroEnvio === 'pendientes') return !envio.enviados[cl.cliente_id]
+        if (filtroEnvio === 'enviados')   return !!envio.enviados[cl.cliente_id]
+        return true
+      })
       return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[92vh]">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[92vh]">
             {/* Cabecera */}
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <div className="flex items-center gap-2 min-w-0">
@@ -1689,72 +1752,117 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
             <div className="px-5 pt-3">
               <div className="w-full bg-gray-200 rounded-full h-2">
                 <div className="bg-[#25D366] h-2 rounded-full transition-all"
-                  style={{ width: `${total > 0 ? (Math.min(envio.idx, total) / total) * 100 : 0}%` }} />
+                  style={{ width: `${total > 0 ? (enviadosN / total) * 100 : 0}%` }} />
               </div>
             </div>
 
-            {terminado ? (
-              <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10">
-                <p className="text-5xl mb-3">✅</p>
-                <p className="font-bold text-gray-800">Recorrido terminado</p>
-                <p className="text-sm text-gray-500 mt-1">
-                  Abriste WhatsApp para {enviadosN} de {total} cliente(s) del tramo <strong>{envio.tramoLabel}</strong>.
-                </p>
-                <button onClick={() => setEnvio(null)}
-                  className="mt-5 bg-primary-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-primary-700">
-                  Cerrar
+            {/* Filtro Todos/Pendientes/Enviados */}
+            <div className="flex items-center gap-1.5 px-5 pt-3">
+              {[
+                { k:'pendientes', l:`Pendientes (${total - enviadosN})` },
+                { k:'enviados',   l:`Enviados (${enviadosN})` },
+                { k:'todos',      l:`Todos (${total})` },
+              ].map(f => (
+                <button key={f.k} onClick={() => setFiltroEnvio(f.k)}
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-full transition-colors ${
+                    filtroEnvio === f.k ? 'bg-slate-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                  {f.l}
                 </button>
-              </div>
-            ) : (
-              <>
-                <div className="px-5 py-3 border-b flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="font-bold text-gray-800 truncate">{cur.nombre}</p>
-                    <p className="text-xs text-gray-500">Cliente {envio.idx + 1} de {total} · {fmt(cur.total)}</p>
-                  </div>
-                  {cur.telefono
-                    ? <span className="text-xs font-bold bg-green-100 text-green-700 px-2.5 py-1 rounded-full whitespace-nowrap flex-shrink-0">📞 {cur.telefono}</span>
-                    : <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full flex-shrink-0">Sin teléfono</span>}
-                </div>
+              ))}
+            </div>
 
-                {/* Vista del mensaje */}
-                <div className="flex-1 overflow-y-auto p-4 bg-[#e5ddd5]">
-                  <div className="flex justify-end">
-                    <div className="bg-[#dcf8c6] rounded-2xl rounded-tr-sm px-4 py-3 max-w-xs shadow-sm">
-                      <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans leading-relaxed">{cur.mensaje}</pre>
-                      <p className="text-right text-xs text-gray-400 mt-1">✓✓</p>
-                    </div>
-                  </div>
-                </div>
+            {/* Lista acordeón */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {visibles.length === 0 && (
+                <p className="text-center text-sm text-gray-400 py-10">
+                  {filtroEnvio === 'pendientes' ? '🎉 No quedan clientes pendientes por contactar.' : 'Sin clientes en este filtro.'}
+                </p>
+              )}
+              {visibles.map(cl => {
+                const abierto  = !!envio.abiertos[cl.cliente_id]
+                const enviado  = !!envio.enviados[cl.cliente_id]
+                const tel      = cl.telefono ? cl.telefono.replace(/\D/g, '') : ''
+                const tipos    = [...new Set(cl.productos.map(p => p.tipo))]
+                return (
+                  <div key={cl.cliente_id}
+                    className={`border rounded-xl overflow-hidden transition-colors ${enviado ? 'border-green-300 bg-green-50/50' : 'border-gray-200'}`}>
+                    <button onClick={() => toggleEnvioAbierto(cl.cliente_id)}
+                      className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-bold text-gray-800 truncate">{cl.nombre}</p>
+                          {enviado && (
+                            <span className="text-[10px] font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full whitespace-nowrap">✅ Enviado</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {/* Diferenciador de tipo de crédito — solo para el cobrador, no viaja al mensaje */}
+                          {tipos.map(t => (
+                            <span key={t} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${
+                              t === 'credito_libre' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
+                              {tipoIcon[t] || '📄'} {t === 'credito_libre' ? 'Sin fecha fija' : (tipoLabel[t] || t)}
+                            </span>
+                          ))}
+                          {cl.telefono
+                            ? <span className="text-[10px] font-bold bg-green-100 text-green-700 px-2 py-0.5 rounded-full whitespace-nowrap">📞 {cl.telefono}</span>
+                            : <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full whitespace-nowrap">Sin teléfono</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                        <span className="font-black text-blue-600 text-sm whitespace-nowrap">{fmt(cl.total)}</span>
+                        <span className="text-gray-400">{abierto ? '▲' : '▼'}</span>
+                      </div>
+                    </button>
 
-                {/* Acciones */}
-                <div className="px-5 py-4 border-t space-y-2">
-                  {cur.telefono ? (
-                    <a href={`https://wa.me/57${tel}?text=${encodeURIComponent(cur.mensaje)}`}
-                       target="_blank" rel="noreferrer"
-                       onClick={() => avanzarEnvio(true)}
-                       className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#25D366] text-white font-semibold text-sm hover:bg-[#1ebe5d] transition-colors">
-                      Abrir WhatsApp y siguiente →
-                    </a>
-                  ) : (
-                    <button onClick={() => avanzarEnvio(false)}
-                       className="w-full py-3 rounded-xl bg-amber-100 text-amber-800 font-semibold text-sm hover:bg-amber-200 transition-colors">
-                      Sin teléfono — saltar →
-                    </button>
-                  )}
-                  <div className="flex gap-2">
-                    <button onClick={() => { navigator.clipboard.writeText(cur.mensaje); setCopiado(true); setTimeout(() => setCopiado(false), 2000) }}
-                      className="flex-1 py-2.5 rounded-xl border text-gray-600 text-xs font-semibold hover:bg-gray-50">
-                      {copiado ? '✅ Copiado' : '📋 Copiar'}
-                    </button>
-                    <button onClick={() => avanzarEnvio(false)}
-                      className="flex-1 py-2.5 rounded-xl border text-gray-500 text-xs font-semibold hover:bg-gray-50">
-                      Saltar →
-                    </button>
+                    {abierto && (
+                      <div className="border-t bg-[#e5ddd5]/50 px-4 py-3 space-y-3">
+                        {/* Vista del mensaje */}
+                        <div className="flex justify-end">
+                          <div className="bg-[#dcf8c6] rounded-2xl rounded-tr-sm px-4 py-3 max-w-full shadow-sm">
+                            <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans leading-relaxed">{cl.mensaje}</pre>
+                            <p className="text-right text-xs text-gray-400 mt-1">✓✓</p>
+                          </div>
+                        </div>
+
+                        {/* Acciones */}
+                        <div className="flex gap-2">
+                          {cl.telefono ? (
+                            <a href={`https://wa.me/57${tel}?text=${encodeURIComponent(cl.mensaje)}`}
+                               target="_blank" rel="noreferrer"
+                               onClick={() => marcarEnviado(cl.cliente_id)}
+                               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-[#25D366] text-white font-semibold text-xs hover:bg-[#1ebe5d] transition-colors">
+                              Abrir WhatsApp
+                            </a>
+                          ) : (
+                            <button onClick={() => marcarEnviado(cl.cliente_id)}
+                              className="flex-1 py-2.5 rounded-xl bg-amber-100 text-amber-800 font-semibold text-xs hover:bg-amber-200 transition-colors">
+                              Marcar como enviado
+                            </button>
+                          )}
+                          <button onClick={() => { navigator.clipboard.writeText(cl.mensaje); setCopiadoCid(cl.cliente_id); setTimeout(() => setCopiadoCid(null), 2000) }}
+                            className="flex-1 py-2.5 rounded-xl border text-gray-600 text-xs font-semibold hover:bg-gray-50">
+                            {copiadoCid === cl.cliente_id ? '✅ Copiado' : '📋 Copiar'}
+                          </button>
+                          {enviado && (
+                            <button onClick={() => marcarEnviado(cl.cliente_id, false)}
+                              className="px-3 py-2.5 rounded-xl border text-red-500 text-xs font-semibold hover:bg-red-50" title="Desmarcar enviado">
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              </>
-            )}
+                )
+              })}
+            </div>
+
+            <div className="px-5 py-3 border-t">
+              <button onClick={() => setEnvio(null)}
+                className="w-full py-2.5 rounded-xl border text-gray-600 text-sm font-semibold hover:bg-gray-50">
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )
