@@ -51,6 +51,7 @@ function CobrosContent() {
   const envioRef = useRef(null) // espejo síncrono de `envio`, para leer el estado más reciente dentro de cargarUltimoPagoCliente
   useEffect(() => { envioRef.current = envio }, [envio])
   const [filtroEnvio, setFiltroEnvio] = useState('pendientes') // 'todos' | 'pendientes' | 'enviados' — dentro del acordeón de envío
+  const [buscarEnvio, setBuscarEnvio] = useState('') // buscador por nombre dentro del modal de Envío asistido
   const [copiadoCid, setCopiadoCid] = useState(null) // cliente_id recién copiado, para feedback visual en su tarjeta
   // Si viene un deep-link de producto_id, arrancar en 'todos' — el crédito
   // podría ser de un cliente o de una empresa interna, y el segmento por
@@ -88,6 +89,7 @@ function CobrosContent() {
           num_cuotas:     c.num_cuotas_producto,
           empresa_id:     c.empresa_id,
           empresa_nombre: c.empresa_nombre,
+          fecha_desembolso: c.fecha_desembolso_real,
           cuotas: []
         }
       }
@@ -175,6 +177,19 @@ function CobrosContent() {
   const enRuta = c => { const fv = fvDe(c); return fv && fv !== '2099-12-31' }   // excluye cuentas abiertas (fiado/adelanto)
   const diasDesde = c => Math.round((new Date(hoy+'T12:00:00') - new Date(fvDe(c)+'T12:00:00')) / 86400000)
   const esCreditoLibre = c => c.tipo_producto === 'credito_libre'
+  // Fecha real de desembolso (fecha_desembolso > fecha_primer_pago > fecha_creacion,
+  // COALESCE resuelto en el backend — ver /api/cuotas). Se usa para decidir cuándo
+  // un crédito sin cuotas futuras lleva "vencido" (no tiene fecha_vencimiento real).
+  const fdDe = c => c.fecha_desembolso_real?.split('T')[0]
+  const diasDesdeDesembolso = c => {
+    const fd = fdDe(c)
+    if (!fd) return 0
+    return Math.round((new Date(hoy+'T12:00:00') - new Date(fd+'T12:00:00')) / 86400000)
+  }
+  // Único criterio de "vencido" para un crédito libre: más de 30 días desde el
+  // desembolso. Se reutiliza tanto para armar el bucket de WhatsApp como para
+  // decidir si el crédito libre de un cliente debe listarse en su tarjeta.
+  const creditoLibreVencido = c => esCreditoLibre(c) && diasDesdeDesembolso(c) > 30
 
   // Desglose pendiente de una cuota: el pago se aplica primero a intereses
   const interesBase    = c => parseFloat(c.abono_interes || 0)
@@ -252,10 +267,20 @@ function CobrosContent() {
   // 2099-12-31 (§18 CLAUDE.md) — `enRuta` los excluye de TODOS los tramos de
   // la Brújula, así que sus clientes nunca entraban al WhatsApp masivo aunque
   // tuvieran saldo pendiente real. Se agregan aparte, solo al tramo "Vencidas"
-  // del envío de WhatsApp (se tratan como deuda pendiente permanente, sin
-  // fecha de vencimiento formal). No se tocan bucketDe.vencidas ni la tarjeta
-  // KPI / Excel de "Vencidas": mostrar ahí una fecha 2099 no tendría sentido.
-  const cuotasCreditoLibrePendientes = todasCuotas.filter(c => esCreditoLibre(c) && pendiente(c) > 0.5)
+  // del envío de WhatsApp. No se tocan bucketDe.vencidas ni la tarjeta KPI /
+  // Excel de "Vencidas": mostrar ahí una fecha 2099 no tendría sentido.
+  //
+  // Corrección 2026-07-29: antes se mandaban TODOS los credito_libre con saldo
+  // pendiente a "Vencidas", incluso los desembolsados ayer — no tiene sentido
+  // cobrarle mora a un crédito recién creado. Ahora solo se consideran
+  // "vencidos" (y por tanto entran al tramo Vencidas del envío masivo) los que
+  // llevan MÁS DE 30 DÍAS desde su fecha real de desembolso (fecha_desembolso
+  // > fecha_primer_pago > fecha_creacion, resuelto en /api/cuotas). Un crédito
+  // libre con menos de 30 días de vigencia no aparece en ningún tramo de la
+  // Brújula (sigue sin fecha de vencimiento formal) hasta que cumpla el mes.
+  const cuotasCreditoLibrePendientes = todasCuotas.filter(c =>
+    creditoLibreVencido(c) && pendiente(c) > 0.5
+  )
   const bucketVencidasWA = [...bucketDe.vencidas, ...cuotasCreditoLibrePendientes]
 
   // ─── Exportar la ruta de cobro a un libro Excel con varias hojas ──────────
@@ -381,8 +406,15 @@ function CobrosContent() {
           // mismo par de cifras que ya muestra el recibo impreso.
           capital: parseFloat(g.capital || 0),
           saldoCapital: g.cuotas.reduce((s, c) => s + capitalPend(c), 0),
+          fechaDesembolso: g.fecha_desembolso,
+          // Un crédito libre solo es deuda "exigible" si lleva más de 30 días
+          // desde el desembolso (misma regla de `cuotasCreditoLibrePendientes`).
+          // Si el cliente cayó en este tramo por OTRO crédito (ej. un préstamo
+          // normal vencido) y además tiene un crédito libre recién desembolsado,
+          // ese crédito libre no debe listarse aquí — no está vencido todavía.
+          libreVigente: g.tipo === 'credito_libre' && !g.cuotas.some(creditoLibreVencido),
         }
-      }).filter(p => p.subtotal > 0.5)
+      }).filter(p => p.subtotal > 0.5 && !p.libreVigente)
       const total = productos.reduce((s, p) => s + p.subtotal, 0)
       // Solo para uso interno del cobrador (ver badge en el modal de envío) —
       // NUNCA se usa dentro de `buildMensaje`, que es lo que ve el cliente.
@@ -408,6 +440,7 @@ function CobrosContent() {
     // se marca al hacer clic en "Abrir WhatsApp" (o manualmente si no hay tel).
     setEnvio({ tramoKey, tramoLabel, lista, enviados: {}, abiertos: {} })
     setFiltroEnvio('pendientes')
+    setBuscarEnvio('')
     setCopiado(false)
   }
 
@@ -1729,6 +1762,8 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
       const total     = envio.lista.length
       const enviadosN = Object.keys(envio.enviados).length
       const visibles  = envio.lista.filter(cl => {
+        const q = buscarEnvio.trim().toLowerCase()
+        if (q && !cl.nombre?.toLowerCase().includes(q)) return false
         if (filtroEnvio === 'pendientes') return !envio.enviados[cl.cliente_id]
         if (filtroEnvio === 'enviados')   return !!envio.enviados[cl.cliente_id]
         return true
@@ -1754,6 +1789,14 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                 <div className="bg-[#25D366] h-2 rounded-full transition-all"
                   style={{ width: `${total > 0 ? (enviadosN / total) * 100 : 0}%` }} />
               </div>
+            </div>
+
+            {/* Buscador por nombre — filtra la lista del tramo sin salir del modal */}
+            <div className="px-5 pt-3">
+              <input type="text" placeholder="🔍 Buscar cliente por nombre..."
+                value={buscarEnvio}
+                onChange={e => setBuscarEnvio(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
             </div>
 
             {/* Filtro Todos/Pendientes/Enviados */}
@@ -1782,7 +1825,6 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                 const abierto  = !!envio.abiertos[cl.cliente_id]
                 const enviado  = !!envio.enviados[cl.cliente_id]
                 const tel      = cl.telefono ? cl.telefono.replace(/\D/g, '') : ''
-                const tipos    = [...new Set(cl.productos.map(p => p.tipo))]
                 return (
                   <div key={cl.cliente_id}
                     className={`border rounded-xl overflow-hidden transition-colors ${enviado ? 'border-green-300 bg-green-50/50' : 'border-gray-200'}`}>
@@ -1796,11 +1838,16 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                           )}
                         </div>
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          {/* Diferenciador de tipo de crédito — solo para el cobrador, no viaja al mensaje */}
-                          {tipos.map(t => (
-                            <span key={t} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${
-                              t === 'credito_libre' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
-                              {tipoIcon[t] || '📄'} {t === 'credito_libre' ? 'Sin fecha fija' : (tipoLabel[t] || t)}
+                          {/* Diferenciador de tipo de crédito + fecha de desembolso — solo
+                              para el cobrador (ayuda a verificar por qué cayó en este tramo),
+                              no viaja al mensaje. Un chip por crédito (no por tipo deduplicado)
+                              porque un mismo cliente puede tener varios créditos del mismo tipo
+                              con fechas de desembolso distintas. */}
+                          {cl.productos.map(p => (
+                            <span key={p.producto_id} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${
+                              p.tipo === 'credito_libre' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
+                              {tipoIcon[p.tipo] || '📄'} {p.tipo === 'credito_libre' ? 'Sin fecha fija' : (tipoLabel[p.tipo] || p.tipo)}
+                              {p.fechaDesembolso && ` · desde ${fmtFechaCorta(p.fechaDesembolso)}`}
                             </span>
                           ))}
                           {cl.telefono

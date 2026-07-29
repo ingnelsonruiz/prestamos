@@ -27,6 +27,7 @@ export async function GET(request) {
              p.frecuencia_cobro AS frecuencia_cobro_producto,
              p.num_cuotas       AS num_cuotas_producto,
              p.metodo_calculo   AS metodo_calculo_producto,
+             COALESCE(p.fecha_desembolso, p.fecha_primer_pago, p.fecha_creacion::DATE) AS fecha_desembolso_real,
              p.empresa_id       AS empresa_id,
              ep.nombre          AS empresa_nombre,
              GREATEST(0, CURRENT_DATE - cu.fecha_vencimiento) AS dias_mora
