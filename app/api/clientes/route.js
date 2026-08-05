@@ -59,6 +59,7 @@ export async function GET(request) {
           WHERE cu.fecha_vencimiento < CURRENT_DATE
             AND cu.estado != 'pagada'
             AND cu.fecha_vencimiento <> DATE '2099-12-31'
+            AND p.estado NOT IN ('saldado','decomisado','refinanciado')
         ) AS cuotas_en_mora,
         CASE
           WHEN COUNT(DISTINCT p.id) FILTER (WHERE p.estado NOT IN ('saldado','decomisado','refinanciado')) = 0 THEN 'sin_prestamos'
@@ -66,6 +67,7 @@ export async function GET(request) {
             WHERE cu.fecha_vencimiento < CURRENT_DATE
               AND cu.estado != 'pagada'
               AND cu.fecha_vencimiento <> DATE '2099-12-31'
+              AND p.estado NOT IN ('saldado','decomisado','refinanciado')
           ) > 0 THEN 'en_mora'
           WHEN COUNT(DISTINCT p.id) FILTER (WHERE p.estado NOT IN ('saldado','decomisado','refinanciado')) > 0 THEN 'activo'
           ELSE 'sin_prestamos'

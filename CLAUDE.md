@@ -1001,3 +1001,41 @@ Como un `credito_libre` puede terminar unificado (estado `refinanciado`), el mó
 - Backend (`abonar/route.js`): acepta `fecha_pago` del body, valida formato `YYYY-MM-DD` y — igual que `POST /api/pagos` — consulta `cred_configuracion.clave='modo_prueba'` y rechaza fechas futuras salvo que el modo prueba esté activo. Se calcula `fechaReal = fecha_pago ? new Date(fecha_pago + 'T12:00:00') : new Date()` (convención de mediodía local del sistema) y se persiste en `cred_pagos.fecha_pago` en vez de `NOW()`. Si no se envía `fecha_pago`, cae en el comportamiento anterior (fecha/hora actual del servidor).
 
 **Alcance:** cambio aislado al módulo Créditos Sin Cuotas Futuras — no toca `lib/calculos.js` ni `/api/pagos`.
+
+---
+
+## 24. Fix — Créditos libres cayendo en "Vencidas" del envío masivo de WhatsApp sin estar vencidos — 2026-07-29
+
+### Síntoma
+
+En `/cobros` → "📲 WhatsApp masivo" → **Vencidas**, aparecían clientes con crédito `credito_libre` (Créditos Sin Cuotas Futuras, §18) recién desembolsados — incluso de **1 día** de antigüedad — mostrando el chip `📅 Sin fecha fija` en la tarjeta del modal "Envío asistido". Un crédito libre no tiene `fecha_vencimiento` real (usa la cuota placeholder `2099-12-31`), así que no existe un concepto de "mora" formal para él, pero el sistema lo trataba como vencido de todas formas.
+
+### Causa raíz — dos bugs distintos, mismo síntoma
+
+1. **`app/cobros/page.js`**, bucket `cuotasCreditoLibrePendientes` (usado para armar `bucketVencidasWA`, el tramo "Vencidas" del envío masivo): metía **todos** los créditos `credito_libre` con saldo pendiente > 0, sin ningún criterio de antigüedad —
+   ```js
+   const cuotasCreditoLibrePendientes = todasCuotas.filter(c => esCreditoLibre(c) && pendiente(c) > 0.5)
+   ```
+2. Incluso corrigiendo lo anterior, **la tarjeta de un cliente en el modal seguía mostrando TODOS sus créditos**, no solo el que causó que entrara al tramo. Un cliente con un préstamo normal en mora (correcto, sí es vencido) que además tenía un crédito libre de 1 día arrastraba ese crédito libre en su tarjeta como si también estuviera vencido — el crédito libre nunca entra a `enTramo` (su cuota placeholder no tiene fecha real), así que la rama `esTramo=false` lo mostraba siempre con "todo su saldo", sin filtrar por antigüedad.
+
+### Regla de negocio definida con el usuario
+
+Un crédito libre solo se considera **vencido** — y por tanto solo debe aparecer en el tramo "Vencidas" y en las tarjetas de clientes — cuando han pasado **más de 30 días desde su fecha real de desembolso**. Antes de cumplir el mes, es un crédito vigente y no debe listarse como deuda exigible en ningún tramo del envío masivo, aunque el cliente entre a la lista por otro crédito distinto.
+
+### Implementación
+
+- **`app/api/cuotas/route.js`** (GET): se agregó al SELECT `COALESCE(p.fecha_desembolso, p.fecha_primer_pago, p.fecha_creacion::DATE) AS fecha_desembolso_real` — misma jerarquía de fallback que ya usa `/api/creditos-libres` (§18) y el campo `fecha_desembolso` de §19. Antes esta ruta solo exponía `p.fecha_creacion AS fecha_prestamo` (fecha de captura en el sistema, no de desembolso real).
+- **`app/cobros/page.js`**:
+  - Nuevos helpers: `fdDe(c)` (fecha de desembolso de la cuota), `diasDesdeDesembolso(c)`, y `creditoLibreVencido(c) = esCreditoLibre(c) && diasDesdeDesembolso(c) > 30` — único criterio de "vencido" para este tipo de crédito, reutilizado en los dos puntos de fix.
+  - `cuotasCreditoLibrePendientes` ahora exige `creditoLibreVencido(c)` además de saldo pendiente.
+  - En `iniciarEnvio()`, cada producto del cliente calcula `libreVigente = tipo==='credito_libre' && !cuotas.some(creditoLibreVencido)`; el `.filter()` final de `productos` excluye `libreVigente` — así un crédito libre sin cumplir el mes nunca se lista en la tarjeta de ningún tramo, así el cliente haya entrado por otro crédito.
+  - `grupos` (estado principal) ahora incluye `fecha_desembolso` por producto (viene de `fecha_desembolso_real`), y cada producto armado en `iniciarEnvio` expone `fechaDesembolso` para mostrarla en la UI.
+
+### Mejoras de UX agregadas en el mismo cambio (a pedido del usuario)
+
+- **Buscador por nombre** dentro del modal "Envío asistido" (`buscarEnvio`, estado nuevo): filtra `envio.lista` por `nombre` sin cerrar el modal ni perder el tramo activo. Se limpia automáticamente al abrir un tramo nuevo (`iniciarEnvio`).
+- **Fecha de desembolso visible por crédito**: el badge de tipo en cada tarjeta (antes deduplicado por tipo con `[...new Set(...)]`) ahora itera `cl.productos` uno por uno (un cliente puede tener varios créditos del mismo tipo con fechas distintas) y agrega `· desde {fecha}` usando el `fechaDesembolso` de cada producto — útil para que el cobrador verifique a simple vista por qué un crédito cayó (o no) en el tramo.
+
+### Patrón a vigilar
+
+Cualquier vista nueva que trate créditos `credito_libre` como "vencidos" debe usar `creditoLibreVencido` (>30 días desde `fecha_desembolso_real`), nunca `fecha_vencimiento` (que siempre es el placeholder `2099-12-31` y no representa mora real). Y cualquier tarjeta/resumen que agrupe **todos los créditos de un cliente** para un tramo de cobro debe filtrar explícitamente los créditos libres vigentes — no basta con que el cliente "esté en la lista" por otro motivo.
