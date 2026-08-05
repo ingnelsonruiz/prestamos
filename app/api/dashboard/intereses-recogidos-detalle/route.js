@@ -19,6 +19,9 @@ export async function GET(request) {
     const filtroRangoLibres = hayRango
       ? `AND pg.fecha_pago::date BETWEEN $1 AND $2`
       : ''
+    const filtroRangoRetornos = hayRango
+      ? `AND r.fecha_retorno BETWEEN $1 AND $2`
+      : ''
     const params = hayRango ? [desde, hasta] : []
 
     // ── Créditos normales (préstamo, venta, empeño, fiado, adelanto, congelación) ──
@@ -85,6 +88,33 @@ export async function GET(request) {
       ORDER BY interes_cobrado DESC
     `, params)
 
+    // ── Retornos de empresas propias ──
+    // No pasan por cred_pagos: son ingresos registrados directamente en
+    // cred_retornos_empresa cuando una empresa propia devuelve capital + interés
+    // generado por un préstamo interno. GET /api/dashboard ya los suma en
+    // intereses.rango vía la query "12 - interesesRetornos", con esta misma
+    // fórmula y el mismo filtro por fecha_retorno (no fecha_pago). Antes de este
+    // fix este monto no aparecía desglosado en ningún modal — ver
+    // [[Incidentes y Bugs Conocidos]] / [[API Endpoints]].
+    const retornosResult = await query(`
+      SELECT
+        e.id                    AS empresa_id,
+        e.nombre                AS nombre_empresa,
+        e.codigo,
+        r.producto_id,
+        p.referencia,
+        COUNT(r.id)::int        AS num_retornos,
+        MAX(r.fecha_retorno)::text AS ultimo_retorno,
+        COALESCE(SUM(r.monto_interes), 0) AS interes_cobrado
+      FROM ${S}.cred_retornos_empresa r
+      JOIN ${S}.cred_empresas_propias e ON e.id = r.empresa_id
+      LEFT JOIN ${S}.cred_productos p ON p.id = r.producto_id
+      WHERE r.monto_interes > 0
+        ${filtroRangoRetornos}
+      GROUP BY e.id, e.nombre, e.codigo, r.producto_id, p.referencia
+      ORDER BY interes_cobrado DESC
+    `, params)
+
     const mapRow = r => ({
       cliente_id:      r.cliente_id,
       nombre_cliente:  r.nombre_cliente,
@@ -98,18 +128,33 @@ export async function GET(request) {
       interes_cobrado: parseFloat(r.interes_cobrado),
     })
 
+    const mapRetorno = r => ({
+      empresa_id:      r.empresa_id,
+      nombre_empresa:  r.nombre_empresa,
+      codigo:          r.codigo,
+      producto_id:     r.producto_id,
+      referencia:      r.referencia,
+      num_pagos:       r.num_retornos,
+      ultimo_pago:     r.ultimo_retorno,
+      interes_cobrado: parseFloat(r.interes_cobrado),
+    })
+
     const normales = normalesResult.rows.map(mapRow)
     const libres    = librestResult.rows.map(mapRow)
+    const retornos  = retornosResult.rows.map(mapRetorno)
     const interesNormales = normales.reduce((s, d) => s + d.interes_cobrado, 0)
     const interesLibres   = libres.reduce((s, d) => s + d.interes_cobrado, 0)
+    const interesRetornos = retornos.reduce((s, d) => s + d.interes_cobrado, 0)
 
     return NextResponse.json({
       normales,
       libres,
+      retornos,
       totales: {
         interes_normales: interesNormales,
         interes_libres:   interesLibres,
-        total:             interesNormales + interesLibres,
+        interes_retornos: interesRetornos,
+        total:             interesNormales + interesLibres + interesRetornos,
       },
     })
   } catch (error) {

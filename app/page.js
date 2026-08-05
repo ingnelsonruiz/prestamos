@@ -540,15 +540,16 @@ export default function Dashboard() {
               {!cargandoRecogidos && detalleRecogidos && (() => {
                 const normales = detalleRecogidos.normales ?? detalleRecogidos ?? []
                 const libres   = detalleRecogidos.libres   ?? []
+                const retornos = detalleRecogidos.retornos ?? []
                 const totales  = detalleRecogidos.totales  ?? null
-                const sinPagos = normales.length === 0 && libres.length === 0
+                const sinPagos = normales.length === 0 && libres.length === 0 && retornos.length === 0
                 return sinPagos ? (
                   <div className="text-center text-gray-400 py-12">Sin pagos en el periodo</div>
                 ) : (
                   <>
-                    {/* Resumen total si hay ambos tipos */}
-                    {libres.length > 0 && totales && (
-                      <div className="grid grid-cols-3 gap-3 bg-amber-50 rounded-xl p-3 border border-amber-200">
+                    {/* Resumen total si hay más de una categoría */}
+                    {(libres.length > 0 || retornos.length > 0) && totales && (
+                      <div className={`grid gap-3 bg-amber-50 rounded-xl p-3 border border-amber-200 ${retornos.length > 0 ? 'grid-cols-4' : 'grid-cols-3'}`}>
                         <div className="text-center">
                           <p className="text-[10px] text-gray-500 uppercase tracking-wide">Créditos normales</p>
                           <p className="text-sm font-black text-amber-700">{fmt(totales.interes_normales)}</p>
@@ -557,6 +558,12 @@ export default function Dashboard() {
                           <p className="text-[10px] text-gray-500 uppercase tracking-wide">Cred. Sin Cuotas</p>
                           <p className="text-sm font-black text-cyan-700">{fmt(totales.interes_libres)}</p>
                         </div>
+                        {retornos.length > 0 && (
+                          <div className="text-center">
+                            <p className="text-[10px] text-gray-500 uppercase tracking-wide">Retornos empresas</p>
+                            <p className="text-sm font-black text-violet-700">{fmt(totales.interes_retornos)}</p>
+                          </div>
+                        )}
                         <div className="text-center border-l border-amber-200">
                           <p className="text-[10px] text-gray-500 uppercase tracking-wide">Total combinado</p>
                           <p className="text-sm font-black text-gray-800">{fmt(totales.total)}</p>
@@ -660,13 +667,62 @@ export default function Dashboard() {
                       }
                     </div>
 
+                    {/* Tabla retornos de empresas propias */}
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2 px-1">
+                        🏢 Retornos de empresas propias ({retornos.length})
+                      </h4>
+                      {retornos.length === 0
+                        ? <p className="text-center text-gray-400 py-6 text-sm">Sin retornos con interés en el periodo</p>
+                        : (
+                          <table className="w-full text-sm border-separate border-spacing-y-1">
+                            <thead>
+                              <tr className="text-xs uppercase tracking-wide text-gray-400">
+                                <th className="text-left px-3 py-2">Empresa</th>
+                                <th className="text-left px-3 py-2">Credito</th>
+                                <th className="text-center px-3 py-2">Retornos</th>
+                                <th className="text-left px-3 py-2">Ultimo retorno</th>
+                                <th className="text-right px-3 py-2 text-violet-700">Interes cobrado</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {retornos.map(d => (
+                                <tr key={(d.producto_id || 'sin-credito') + '-' + d.empresa_id} className="bg-violet-50 hover:bg-violet-100 rounded-lg transition-colors">
+                                  <td className="px-3 py-2 rounded-l-lg">
+                                    <a href={'/gastos?empresa=' + d.empresa_id} className="font-semibold text-gray-800 hover:text-violet-700 hover:underline block">{d.nombre_empresa}</a>
+                                    <span className="text-[11px] text-gray-400">{d.codigo}</span>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    {d.producto_id
+                                      ? <a href={'/prestamos/' + d.producto_id} className="text-blue-600 hover:underline font-mono text-xs">{d.referencia || d.producto_id.slice(0,8)}</a>
+                                      : <span className="text-gray-400 text-xs">Sin crédito asociado</span>}
+                                  </td>
+                                  <td className="px-3 py-2 text-center text-gray-600 font-semibold">{d.num_pagos}</td>
+                                  <td className="px-3 py-2 text-gray-500 text-xs whitespace-nowrap">
+                                    {d.ultimo_pago ? new Date(d.ultimo_pago + 'T12:00:00').toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric'}) : '-'}
+                                  </td>
+                                  <td className="px-3 py-2 text-right rounded-r-lg font-bold text-violet-700">{fmt(d.interes_cobrado)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr>
+                                <td colSpan="4" className="px-3 pt-2 text-xs font-semibold text-gray-500">Subtotal retornos</td>
+                                <td className="px-3 pt-2 text-right font-black text-violet-700">{fmt(retornos.reduce((s, d) => s + d.interes_cobrado, 0))}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        )
+                      }
+                    </div>
+
                     {/* Total general */}
                     <div className="flex justify-between items-center pt-2 border-t">
                       <span className="text-sm font-semibold text-gray-600">
-                        Total ({normales.length + libres.length} credito{normales.length + libres.length !== 1 ? 's' : ''})
+                        Total ({normales.length + libres.length + retornos.length} registro{normales.length + libres.length + retornos.length !== 1 ? 's' : ''})
                       </span>
                       <span className="text-base font-black text-amber-600">
-                        {fmt(normales.reduce((s, d) => s + d.interes_cobrado, 0) + libres.reduce((s, d) => s + d.interes_cobrado, 0))}
+                        {fmt(normales.reduce((s, d) => s + d.interes_cobrado, 0) + libres.reduce((s, d) => s + d.interes_cobrado, 0) + retornos.reduce((s, d) => s + d.interes_cobrado, 0))}
                       </span>
                     </div>
                   </>

@@ -49,12 +49,15 @@
 - **Fix**: se agregó `AND p.estado NOT IN ('saldado','decomisado','refinanciado')` al `FILTER` de `cuotas_en_mora` y a su uso en el `CASE` de `estado_calculado`, en `app/api/clientes/route.js`.
 - **Patrón a vigilar**: cualquier agregación nueva sobre `cred_cuotas` a nivel de cliente debe excluir explícitamente esos tres estados. Detalle completo en [[Base de Datos]].
 
-### 2026-08-05 — Modal "Intereses recogidos" no cuadraba con el KPI del dashboard
+### 2026-08-05 — Modal "Intereses recogidos" no cuadraba con el KPI del dashboard (2 vueltas, ahora resuelto)
 
-- **Síntoma**: la tarjeta KPI mostraba $5.480.010 pero el modal de detalle (doble clic) sumaba solo $2.223.050.
+- **Síntoma (1ª vuelta)**: la tarjeta KPI mostraba $5.480.010 pero el modal de detalle (doble clic) sumaba solo $2.223.050.
 - **Causa**: `GET /api/dashboard` ya sumaba tres fuentes correctamente (préstamos normales vía `cu.abono_interes`, retornos de empresas, créditos libres vía `pg.monto_interes`). Pero `GET /api/dashboard/intereses-recogidos-detalle` solo implementaba la fórmula de créditos normales contra **todos** los productos sin excluir `credito_libre` — que por tener `abono_interes=0` fijo siempre aportaba $0 y quedaba fuera del `HAVING > 0`. Tampoco tocaba `cred_retornos_empresa`.
-- **Fix**: se separó el endpoint en dos queries (`normales` excluyendo `credito_libre`, `libres` calculando desde `pg.monto_interes`), devueltas como `{ normales, libres, totales }` — mismo formato que `intereses-detalle`. El frontend (`app/page.js`) ahora muestra dos tablas con subtotales. De paso se cambió `INNER JOIN cred_clientes` a `LEFT JOIN` con fallback a `cred_empresas_propias` para no descartar intereses de préstamos internos.
-- **Pendiente**: los retornos de empresas propias (`intereses_retornos`) siguen sin desglosarse en este modal — si el rango tiene retornos, el KPI seguirá mostrando un total ligeramente mayor a `normales + libres`. Detalle completo en [[API Endpoints]].
+- **Fix (1ª vuelta)**: se separó el endpoint en dos queries (`normales` excluyendo `credito_libre`, `libres` calculando desde `pg.monto_interes`), devueltas como `{ normales, libres, totales }`. El frontend (`app/page.js`) mostró dos tablas con subtotales. De paso se cambió `INNER JOIN cred_clientes` a `LEFT JOIN` con fallback a `cred_empresas_propias`.
+- **Síntoma (2ª vuelta)**: tras el primer fix seguía quedando una diferencia residual — KPI $5.480.010 vs modal combinado $5.455.010 (diferencia exacta de $25.000).
+- **Causa (2ª vuelta)**: exactamente la brecha ya anticipada en la documentación del primer fix — faltaba la tercera fuente, `intereses_retornos` (retornos de empresas propias, tabla `cred_retornos_empresa`, filtrada por `fecha_retorno` en vez de `fecha_pago`).
+- **Fix (2ª vuelta)**: se agregó una tercera query `retornos` al endpoint, replicando exactamente la fórmula y el filtro de fecha de la query 12 de `GET /api/dashboard`. Formato final: `{ normales, libres, retornos, totales: { interes_normales, interes_libres, interes_retornos, total } }`. El modal ahora muestra tres tablas (📋 normales / 📅 sin cuotas / 🏢 retornos) con subtotales y un resumen de 4 columnas. Verificado con `esbuild` antes de entregar.
+- **Estado**: resuelto — `totales.total` del modal ahora debe igualar siempre `intereses.rango` del dashboard para el mismo rango. Detalle completo en [[API Endpoints]].
 
 ### 2026-07-12 — Bugs del módulo Créditos Sin Cuotas Futuras (durante desarrollo)
 
