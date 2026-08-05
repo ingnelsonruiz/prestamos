@@ -17,6 +17,8 @@
 
 ## 🗺️ Índice de la Bóveda
 
+### Núcleo
+
 | Archivo | Contenido |
 |---------|-----------|
 | [[Stack Tecnológico]] | Framework, librerías, hashing, despliegue |
@@ -27,6 +29,22 @@
 | [[Flujos de Negocio]] | Pagos, congelaciones, interés fijo, incidentes críticos |
 | [[Créditos Sin Cuotas Futuras]] | Módulo independiente — crédito por fecha de corte, 30/360 |
 | [[Empresas y Gastos]] | Módulo de empresas propias, gastos, retornos, auto-registro |
+
+### Módulos y capas (ampliación 2026-08-05)
+
+| Archivo | Contenido |
+|---------|-----------|
+| [[Autenticación y Seguridad]] | `middleware.js`, JWT, cookie de sesión, `/login` — hallazgos de seguridad |
+| [[Auditoría]] | `lib/auditoria.js`, catálogo `ACCIONES`/`MODULOS`, huecos de trazabilidad |
+| [[Componentes y Layout Frontend]] | `Sidebar`, `BottomNav`, `LayoutWrapper`, `KPICard`, layout raíz |
+| [[Migración y Backup]] | Importación Excel, cargue inicial, reset, backup/restore — todos de alto riesgo |
+| [[Auto-registro y Recibos]] | `/registro`, `/autoregistro/[id]`, búsqueda de recibos |
+| [[Unificar Créditos]] | Consolidación N:1 de créditos, vs. refinanciación 1:1 |
+| [[Usuarios e Informes]] | CRUD de usuarios, `/api/informes`, exportación Excel |
+| [[Dashboard y KPIs]] | Las 16 queries de `GET /api/dashboard` explicadas query por query |
+| [[Empeños, Congelación y Utilidades Admin]] | `/empenos`, `fix-interes-fijo`, `GET /api/cuotas` |
+| [[Glosario]] | Términos de negocio, enums, consecutivos, convenciones transversales |
+| [[Incidentes y Bugs Conocidos]] | Registro cronológico único de bugs corregidos y riesgos abiertos |
 
 ---
 
@@ -75,3 +93,11 @@
 7. **Siempre leer el archivo antes de editarlo** con `Read` antes de `Write`/`Edit`.
 8. **`cliente_id` puede ser NULL** en `cred_productos`, `cred_cuotas` y `cred_pagos` desde las migraciones 23 y 25 — no asumir NOT NULL en código nuevo.
 9. **Nombres de clientes y empresas siempre en MAYÚSCULAS** — normalizar en backend antes de INSERT/UPDATE.
+10. **Cualquier agregación de capital/mora por cliente o por cartera debe excluir `p.estado IN ('saldado','decomisado','refinanciado')`** — de lo contrario se sobreconteo o falso-positivo de mora en créditos ya cerrados/refinanciados/unificados. Ver [[Incidentes y Bugs Conocidos]].
+11. **`cred_cuotas.abono_interes` es siempre `0` para `tipo='credito_libre'`** — su interés real se lee de `cred_pagos.monto_interes`, nunca de la cuota placeholder.
+
+---
+
+## 🔴 Hallazgos de seguridad pendientes de corregir
+
+La revisión de código del 2026-08-05 encontró que **varios endpoints administrativos y destructivos no verifican rol de usuario**, incluyendo exportación/restauración de backup completo (con hashes de contraseña), gestión de usuarios, reverso masivo de interés fijo y lectura de auditoría. Ver el detalle completo, archivo por archivo, en [[Incidentes y Bugs Conocidos]] antes de tocar cualquiera de esos módulos — son riesgos reales verificados en el código fuente, no hipótesis.

@@ -9,15 +9,15 @@ El sistema implementa PostgreSQL y encapsula todas sus entidades dentro del esqu
 ### 1. `cred_clientes`
 Almacena la información de contacto de los clientes deudores.
 
-| Campo | Tipo | Notas |
-|-------|------|-------|
-| `id` | TEXT PK | UUID v4 |
-| `documento` | TEXT UNIQUE | Cédula o NIT |
-| `nombre` | TEXT | Siempre en **MAYÚSCULAS** (migración 20) |
-| `telefono` | TEXT NULL | Principal |
-| `telefono2` | TEXT NULL | Secundario (agregado via `autoRegistro`) |
-| `direccion` | TEXT NULL | Siempre en MAYÚSCULAS |
-| `email` | TEXT NULL | |
+| Campo       | Tipo                  | Notas                                                        |
+| ----------- | --------------------- | ------------------------------------------------------------ |
+| `id`        | TEXT PK               | UUID v4                                                      |
+| `documento` | TEXT UNIQUE           | Cédula o NIT                                                 |
+| `nombre`    | TEXT                  | Siempre en **MAYÚSCULAS** (migración 20)                     |
+| `telefono`  | TEXT NULL             | Principal                                                    |
+| `telefono2` | TEXT NULL             | Secundario (agregado via `autoRegistro`)                     |
+| `direccion` | TEXT NULL             | Siempre en MAYÚSCULAS                                        |
+| `email`     | TEXT NULL             |                                                              |
 | `es_prueba` | BOOLEAN DEFAULT FALSE | TRUE = cliente de prueba, eliminable si no tiene movimientos |
 
 **Índice parcial**: `idx_cred_clientes_prueba ON cred_clientes(es_prueba) WHERE es_prueba = TRUE`

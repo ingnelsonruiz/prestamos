@@ -67,7 +67,10 @@
             "type": "leaf",
             "state": {
               "type": "bookmarks",
-              "state": {},
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
               "icon": "lucide-bookmark",
               "title": "Marcadores"
             }
@@ -180,8 +183,22 @@
   },
   "active": "280af94212268a7f",
   "lastOpenFiles": [
-    "PROMPT.md",
+    "Incidentes y Bugs Conocidos.md",
+    "Glosario.md",
+    "Empeños, Congelación y Utilidades Admin.md",
+    "Dashboard y KPIs.md",
+    "Usuarios e Informes.md",
+    "Unificar Créditos.md",
+    "Auto-registro y Recibos.md",
+    "Migración y Backup.md",
+    "Componentes y Layout Frontend.md",
+    "Auditoría.md",
+    "Autenticación y Seguridad.md",
     "CLAUDE.md",
+    "Lógica Financiera y Calificación.md",
+    "API Endpoints.md",
+    "Base de Datos.md",
+    "PROMPT.md",
     "Créditos Sin Cuotas Futuras.md",
     "Créditos Sin Cuotas Futuras.md.tmp.48640.bfb86b62258f",
     "CLAUDE.md.tmp.25508.f9ce495b7128",
@@ -190,11 +207,8 @@
     "Empresas y Gastos.md",
     "Empresas y Gastos.md.tmp.25508.75f6065738a0",
     "Flujos de Negocio.md.tmp.23084.a2543a75222c",
-    "API Endpoints.md",
-    "Lógica Financiera y Calificación.md",
     "Flujos de Negocio.md",
     "Estructura de Directorios.md",
-    "Base de Datos.md",
     "Stack Tecnológico.md",
     "Sin título.base",
     "Bienvenido.md"

@@ -1,6 +1,6 @@
 # Estructura de Directorios
 
-Árbol del repositorio Next.js actualizado al 2026-07-12.
+Árbol del repositorio Next.js actualizado al 2026-08-05.
 
 ```
 Programa_Creditos/
@@ -13,20 +13,25 @@ Programa_Creditos/
 │   │   ├── clientes/
 │   │   │   └── [id]/route.js
 │   │   ├── productos/
+│   │   │   ├── unificar/route.js            # POST unificación N:1 de créditos
 │   │   │   └── [id]/
 │   │   │       ├── route.js
 │   │   │       └── liquidar/route.js        # POST liquidación anticipada
-│   │   ├── cuotas/route.js
+│   │   ├── cuotas/route.js                  # GET libro de cuotas (sin paginación)
 │   │   ├── pagos/route.js
 │   │   ├── recibos/route.js                 # Búsqueda por número de recibo
 │   │   ├── historial/route.js               # GET snapshots + pagos + cuotas
 │   │   ├── dashboard/
-│   │   │   ├── route.js                     # KPIs globales
+│   │   │   ├── route.js                     # KPIs globales — 16 queries en Promise.all
 │   │   │   ├── capital-detalle/route.js     # Desglose capital en calle
 │   │   │   ├── intereses-detalle/route.js   # Desglose intereses proyectados
-│   │   │   └── intereses-recogidos-detalle/ # Desglose intereses cobrados
+│   │   │   └── intereses-recogidos-detalle/route.js  # Desglose intereses cobrados
 │   │   ├── estado/[id]/route.js             # PÚBLICO — estado de cuenta
 │   │   ├── informes/route.js
+│   │   │
+│   │   ├── # ── MANTENIMIENTO / ADMIN ─────────────────────────────
+│   │   ├── admin/
+│   │   │   └── fix-interes-fijo/route.js    # GET lista / POST revierte interes_fijo — ⚠️ sin check de rol admin
 │   │   │
 │   │   ├── # ── MÓDULO EMPRESAS Y GASTOS ──────────────────────────
 │   │   ├── empresas/
@@ -70,31 +75,38 @@ Programa_Creditos/
 │   │   │   ├── estructura/route.js          # POST recrear estructura BD
 │   │   │   └── historial/route.js           # GET historial de backups
 │   │   │
-│   │   ├── usuarios/[id]/route.js
-│   │   ├── auditoria/route.js
+│   │   ├── usuarios/
+│   │   │   ├── route.js                     # GET lista / POST crear — ⚠️ sin check de rol admin
+│   │   │   └── [id]/route.js                # PUT editar / DELETE — ⚠️ sin check de rol admin
+│   │   ├── auditoria/route.js               # GET — ⚠️ sin check de rol
 │   │   └── health/route.js                  # GET healthcheck SELECT 1
 │   │
 │   ├── # ── PÁGINAS UI ────────────────────────────────────────────
 │   ├── page.js                              # Dashboard principal
-│   ├── login/page.js
-│   ├── clientes/[id]/page.js
+│   ├── login/page.js (+ layout.js propio)
+│   ├── clientes/
+│   │   ├── page.js
+│   │   └── [id]/page.js
 │   ├── prestamos/
 │   │   ├── page.js
 │   │   ├── nuevo/page.js
+│   │   ├── unificar/page.js                 # Unificación N:1 — selección de créditos origen
 │   │   └── [id]/page.js
-│   ├── cobros/page.js
-│   ├── empenos/page.js
+│   ├── cobros/page.js                       # 113 KB — el más grande de la app
+│   ├── empenos/page.js                      # Tablero de alertas de rescate (solo lectura)
 │   ├── recibos/page.js
 │   ├── informes/page.js
-│   ├── estado/[id]/page.js                  # PÚBLICO
+│   ├── estado/[id]/page.js (+ layout.js)    # PÚBLICO
 │   ├── gastos/page.js                       # Módulo de gastos
-│   ├── registro/page.js                     # PÚBLICO — auto-registro de clientes
-│   ├── autoregistro/[id]/page.js            # PÚBLICO — confirmación
+│   ├── registro/page.js (+ layout.js propio)# PÚBLICO — auto-registro de clientes
+│   ├── autoregistro/[id]/page.js            # PÚBLICO — confirmación (sin layout.js propio, hereda metadata root)
 │   ├── creditos-libres/
 │   │   ├── page.js                          # Lista con KPIs y filtros
 │   │   ├── nuevo/page.js                    # Formulario de creación
 │   │   └── [id]/page.js                     # Detalle + modal de abono (?abrir=1)
-│   ├── migracion/page.js
+│   ├── migracion/
+│   │   ├── page.js                          # Importación Excel + reset (51 KB)
+│   │   └── cargue-inicial/page.js           # Legalización de créditos existentes
 │   ├── configuracion/page.js
 │   ├── backup/page.js
 │   ├── usuarios/page.js
@@ -170,3 +182,23 @@ Programa_Creditos/
 
 ### Auto-registro (2026-07)
 - `middleware.js` — rutas `/registro`, `/autoregistro/*` y `/api/registro` marcadas como públicas (sin JWT)
+
+---
+
+## Notas de la bóveda por carpeta/módulo
+
+Para el detalle profundo de cada carpeta no cubierta arriba en una tabla de endpoints, ver la nota dedicada:
+
+| Carpeta / archivo | Nota de la bóveda |
+|---|---|
+| `middleware.js`, `lib/auth.js`, `app/api/auth/*`, `app/login` | [[Autenticación y Seguridad]] |
+| `lib/auditoria.js`, `app/api/auditoria`, `app/auditoria` | [[Auditoría]] |
+| `components/*.jsx`, `app/layout.js` | [[Componentes y Layout Frontend]] |
+| `app/api/migracion/*`, `app/api/backup/*`, `app/migracion/*`, `app/backup` | [[Migración y Backup]] |
+| `app/api/registro`, `app/api/autoregistro/*`, `app/registro`, `app/autoregistro/*`, `app/api/recibos` | [[Auto-registro y Recibos]] |
+| `app/api/productos/unificar`, `app/prestamos/unificar` | [[Unificar Créditos]] |
+| `app/api/usuarios/*`, `app/usuarios`, `app/api/informes`, `app/informes` | [[Usuarios e Informes]] |
+| `app/api/dashboard/*` (los 3 endpoints) | [[Dashboard y KPIs]] |
+| `app/empenos`, `app/api/admin/fix-interes-fijo`, `app/api/cuotas` | [[Empeños, Congelación y Utilidades Admin]] |
+| Enums, consecutivos, términos de negocio | [[Glosario]] |
+| Registro cronológico de bugs y riesgos verificados | [[Incidentes y Bugs Conocidos]] |

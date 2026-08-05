@@ -63,7 +63,7 @@ Catálogo completo de los Route Handlers del backend Next.js. Todas las rutas ba
 | GET | `/api/dashboard` | KPIs globales. Ver estructura de respuesta abajo |
 | GET | `/api/dashboard/capital-detalle` | Desglose de "Capital en la calle" por cliente/crédito (foto del saldo actual, sin filtro de fechas) |
 | GET | `/api/dashboard/intereses-detalle` | Desglose de intereses proyectados. Retorna `{ normales[], libres[], totales }` — ver abajo |
-| GET | `/api/dashboard/intereses-recogidos-detalle` | Desglose de intereses ya cobrados por crédito |
+| GET | `/api/dashboard/intereses-recogidos-detalle` | Desglose de intereses ya cobrados por crédito. Retorna `{ normales[], libres[], totales }` (mismo formato que `intereses-detalle`, corregido 2026-08-05 — ver abajo) |
 
 ### Estructura de respuesta `GET /api/dashboard`
 
@@ -136,6 +136,26 @@ Acepta `?desde=YYYY-MM-DD&hasta=YYYY-MM-DD`. Antes retornaba un array plano; aho
 ```
 
 > **Retrocompatibilidad**: el frontend usa `detalleIntereses.normales ?? detalleIntereses ?? []` para soportar tanto la respuesta nueva (objeto) como la vieja (array plano).
+
+### Estructura de respuesta `GET /api/dashboard/intereses-recogidos-detalle`
+
+Mismo formato `{ normales[], libres[], totales }` que `intereses-detalle`, adoptado el 2026-08-05:
+
+```js
+{
+  normales: [ { cliente_id, nombre_cliente, documento, producto_id, referencia,
+                tipo_producto, monto_capital, num_pagos, ultimo_pago, interes_cobrado } ],
+  libres:   [ { ...mismos campos... } ],   // créditos tipo credito_libre
+  totales: { interes_normales, interes_libres, total }
+}
+```
+
+> **Retrocompatibilidad**: el frontend usa `detalleRecogidos.normales ?? detalleRecogidos ?? []`, igual patrón que `intereses-detalle`.
+
+> ⚠️ **Bug corregido (2026-08-05) — el modal "Detalle de intereses recogidos" no cuadraba con el KPI "Intereses recogidos"**: la card grande del dashboard (`GET /api/dashboard`, campo `intereses.total`/`.rango`) ya sumaba correctamente tres fuentes — `intereses_prestamos` (créditos normales, vía `cu.abono_interes`), `intereses_retornos` (retornos de empresas propias) e `intereses_creditos_libres` (créditos sin cuotas, tomado de `pg.monto_interes` porque su cuota placeholder tiene `abono_interes=0` fijo — el propio código de `GET /api/dashboard` ya traía un comentario documentando exactamente esta razón, query "16"). Pero `GET /api/dashboard/intereses-recogidos-detalle` (el que alimenta el modal de doble clic) solo implementaba la fórmula de créditos normales (`LEAST(pg.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota,0)`) contra **todos** los productos sin excluir `credito_libre` — que por el `abono_interes=0` siempre aportaba `$0` y quedaba fuera del `HAVING > 0` — y no tocaba `cred_retornos_empresa` en absoluto. Resultado: el tile mostraba el total real (ej. $5.480.010) pero el detalle solo sumaba los créditos normales (ej. $2.223.050), sin mostrar ni explicar la diferencia.
+> **Fix**: se separó `intereses-recogidos-detalle` en dos queries — `normales` (excluye `credito_libre`, misma fórmula de antes) y `libres` (créditos `credito_libre`, interés tomado de `pg.monto_interes`) — devueltas en el mismo formato `{ normales, libres, totales }` que ya usaba `intereses-detalle`, con dos tablas separadas en el modal (📋 normales / 📅 sin cuotas) más un resumen de subtotales, igual patrón visual que el modal de intereses proyectados. **Los retornos de empresas propias (`intereses_retornos`) siguen sin desglosarse en este modal** — si `ir.total` > 0 en el rango, el tile seguirá mostrando un total ligeramente mayor a `normales + libres` del modal; pendiente agregar una tercera sección si se necesita trazabilidad completa.
+> **De paso**: se cambió el `JOIN cred_clientes` a `LEFT JOIN` con fallback a `cred_empresas_propias` (vía `p.empresa_id` cuando `es_prestamo_interno=TRUE`) en ambas queries — antes un `INNER JOIN` descartaba silenciosamente los intereses cobrados en préstamos internos a empresas propias (`cliente_id NULL` desde la migración 25).
+> **Patrón a vigilar**: cualquier cálculo de interés cobrado/pendiente que dependa de `cred_cuotas.abono_interes` da `0` para `tipo='credito_libre'` — su cuota es solo un placeholder de trazabilidad (ver `Créditos Sin Cuotas Futuras.md`). El interés real de ese tipo siempre debe leerse de `cred_pagos.monto_interes`.
 
 ---
 
