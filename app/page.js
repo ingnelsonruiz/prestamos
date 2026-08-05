@@ -571,6 +571,50 @@ export default function Dashboard() {
                       </div>
                     )}
 
+                    {/* Diagnóstico: compara este detalle contra el KPI del dashboard,
+                        categoría por categoría, para detectar en qué fuente exacta
+                        está la diferencia si el total combinado no cuadra con la
+                        tarjeta "Intereses recogidos". Solo tiene sentido con un
+                        rango de fechas activo (sin rango, intereses.rango* es 0). */}
+                    {rango && totales && (() => {
+                      const filas = [
+                        { label: 'Créditos normales',  kpi: intereses.rango_prestamos,       detalle: totales.interes_normales },
+                        { label: 'Cred. Sin Cuotas',    kpi: intereses.rango_creditos_libres,  detalle: totales.interes_libres },
+                        { label: 'Retornos empresas',   kpi: intereses.rango_retornos,         detalle: totales.interes_retornos },
+                      ]
+                      const hayDiferencia = filas.some(f => Math.abs((f.kpi ?? 0) - (f.detalle ?? 0)) > 1)
+                      return hayDiferencia ? (
+                        <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                          <p className="text-[11px] font-bold text-red-700 uppercase tracking-wide mb-2">
+                            ⚠️ Diferencia detectada vs. KPI del dashboard
+                          </p>
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="text-gray-500">
+                                <th className="text-left py-1">Categoria</th>
+                                <th className="text-right py-1">KPI</th>
+                                <th className="text-right py-1">Detalle</th>
+                                <th className="text-right py-1">Diferencia</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filas.map(f => {
+                                const diff = (f.kpi ?? 0) - (f.detalle ?? 0)
+                                return (
+                                  <tr key={f.label} className={Math.abs(diff) > 1 ? 'font-bold text-red-700' : 'text-gray-600'}>
+                                    <td className="py-1">{f.label}</td>
+                                    <td className="py-1 text-right">{fmt(f.kpi ?? 0)}</td>
+                                    <td className="py-1 text-right">{fmt(f.detalle ?? 0)}</td>
+                                    <td className="py-1 text-right">{fmt(diff)}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null
+                    })()}
+
                     {/* Tabla créditos normales */}
                     <div>
                       <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2 px-1">

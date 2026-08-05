@@ -131,6 +131,8 @@ intereses: {
 ```
 
 > ⚠️ **Riesgo — filtrado asimétrico de tipos entre queries.** La query 2a (préstamos) no excluye `fiado`, `adelanto` ni `congelacion` como sí lo hacen la cartera (§1) y los KPIs históricos (§9). Si alguna cuota de esos tipos llegara a tener `abono_interes > 0` (por ejemplo una `congelacion`, cuyo `monto_capital` según el propio comentario del código *"incluye interés viejo"*), ese interés se sumaría a `intereses.total` mientras su capital está excluido de `cartera.capital_activo` — dos KPIs del mismo dashboard describiendo universos de productos ligeramente distintos. No se detectó evidencia de que esto ocurra hoy (las cuentas abiertas normalmente tienen `con_interes=false`), pero es una inconsistencia estructural a vigilar si se agregan más tipos de producto.
+>
+> **✅ Corregido (2026-08-05) — variante de este mismo riesgo, confirmada contra la BD real**: la query 2 tampoco excluía `credito_libre`. Se verificaron 11 créditos libres en producción cuya cuota placeholder está mal formada (`abono_interes > 0` real, en vez del `0` fijo esperado — ver [[Créditos Sin Cuotas Futuras]]), causando doble conteo de interés (ya contado también en `intereses_creditos_libres` vía `pg.monto_interes`). Se agregó `JOIN cred_productos` + `WHERE tipo != 'credito_libre'` a la query 2. Detalle completo, impacto medido y lista de créditos afectados en [[Incidentes y Bugs Conocidos]].
 
 El endpoint hermano `GET /api/dashboard/intereses-recogidos-detalle` desglosa estas tres fuentes por crédito individual; su documentación completa (incluye el bug corregido el 2026-08-05 sobre créditos sin cuotas sin corte y retornos de empresa) está en [[API Endpoints]].
 
@@ -158,6 +160,8 @@ WHERE cu.fecha_vencimiento != '2099-12-31'
 Comentario del código: *"Usa comparación de fechas — NO usa `estado='mora'` que no se auto-asigna"* (consistente con la regla documentada en [[Base de Datos]]: `cred_cuotas.estado` solo admite `pendiente`/`parcial`/`pagada` por CHECK). El monto en mora de cada cuota es `monto_cuota - monto_pagado` (saldo pendiente de la cuota, no del crédito completo), y la antigüedad es `$1::date - cu.fecha_vencimiento` en días calendario reales. `clientes_30d` solo cuenta clientes con **al menos una** cuota a más de 30 días — no hay un desglose de clientes por las tres cubetas, solo de montos.
 
 > ⚠️ **Cross-check con `cartera_vencida`.** `mora.monto_total` (aquí) y `cartera_vencida.total` (sección 5) parten de la misma condición base (`estado IN ('pendiente','parcial')` y `fecha_vencimiento < hoy`, excluyendo el placeholder `2099-12-31`) y por lo tanto **deberían ser matemáticamente idénticos** — son dos vistas (por antigüedad vs por período calendario de vencimiento) del mismo universo de cuotas. Si en producción llegan a divergir, es señal de un problema real (p.ej. una de las dos queries corriendo contra un snapshot distinto por la falta de transacción compartida del `Promise.all`), no una diferencia de negocio esperada.
+>
+> **✅ Corregido (2026-08-05) — esta query SÍ tenía el problema estructural, confirmado contra la BD real, no solo teórico.** Ni esta query ni la de `cartera_vencida` (§5) hacían `JOIN` a `cred_productos`, así que no podían excluir créditos ya `refinanciado`/`saldado`/`decomisado` (mismo patrón del bug de "clientes en mora" corregido antes en `/api/clientes`, nunca replicado aquí) ni créditos `tipo='credito_libre'` con cuota mal formada (ver riesgo de la sección 2). Impacto medido en producción: **$87.777.732 de mora falsa** ($35.583.932 de créditos refinanciados + $56.088.800 de créditos libres, de un total reportado de $318.940.552 — el 27,5%). Se agregó `JOIN cred_productos p` + `AND p.estado NOT IN ('saldado','decomisado','refinanciado') AND p.tipo != 'credito_libre'` a ambas queries. Detalle completo, metodología de verificación y lista de créditos afectados en [[Incidentes y Bugs Conocidos]].
 
 ---
 
@@ -382,10 +386,11 @@ Devuelve `{ normales[], libres[], totales }` (formato nuevo; el frontend soporta
 
 ## Resumen de riesgos detectados (⚠️)
 
-| # | Riesgo | Ubicación |
-|---|--------|-----------|
-| 1 | `cartera.capital_activo` incluye créditos libres por su `monto_capital` original (no el saldo real) y nunca los marca en `capital_mora`, aunque estén muy atrasados según `creditos_libres_mora` | Query 1 (`carteraEstados`) |
-| 2 | La query de intereses de préstamos normales no excluye `fiado`/`adelanto`/`congelacion` como sí lo hacen cartera y KPIs históricos | Query 2 (`interesesPeriodos`) |
-| 3 | `mora.monto_total` y `cartera_vencida.total` deberían coincidir exactamente (mismo universo); si divergen en producción, hay que investigar, no asumir que es "normal" | Query 3 vs Query 5 |
-| 4 | Exclusión de `credito_libre` en `capitalCalle` / `interesesProyectados` es implícita (vía filtro de fecha placeholder `2099-12-31`), no explícita por `tipo` — frágil ante cambios futuros del placeholder | Query 6 y 7 |
-| 5 | `intereses_libres_proyectados` usa `desde` (elegido por el usuario) en vez de `inicio_periodo` (último corte real) como inicio del cálculo 30/360 — puede solaparse con `creditos_libres.intereses_cobrados` si `desde` antecede al último corte real | Sección "capital" (JS, tras query 17) y `intereses-detalle/route.js` |
+| # | Riesgo | Ubicación | Estado |
+|---|--------|-----------|--------|
+| 1 | `cartera.capital_activo` incluye créditos libres por su `monto_capital` original (no el saldo real) y nunca los marca en `capital_mora`, aunque estén muy atrasados según `creditos_libres_mora` | Query 1 (`carteraEstados`) | Sin corregir |
+| 2 | La query de intereses de préstamos normales no excluía `credito_libre` — causó doble conteo real de $25.000 el 04/08/2026 | Query 2 (`interesesPeriodos`) | **✅ Corregido 2026-08-05** |
+| 3 | `mora.monto_total` y `cartera_vencida.total` no excluían productos refinanciados/saldados/decomisados ni `credito_libre` — $87.777.732 de mora falsa medida en producción (27,5% del total reportado) | Query 3 vs Query 5 | **✅ Corregido 2026-08-05** |
+| 4 | Exclusión de `credito_libre` en `capitalCalle` / `interesesProyectados` (queries 6 y 7) — a diferencia de lo que se documentó originalmente, **SÍ es explícita**: ambas hacen `JOIN cred_productos` y filtran `p.estado IN ('activo','al_dia','en_mora')`, por lo que no heredan el bug de las queries 3/5. Verificado al corregir el riesgo #3 | Query 6 y 7 | No es un riesgo real — documentación previa corregida |
+| 5 | `intereses_libres_proyectados` usa `desde` (elegido por el usuario) en vez de `inicio_periodo` (último corte real) como inicio del cálculo 30/360 — puede solaparse con `creditos_libres.intereses_cobrados` si `desde` antecede al último corte real | Sección "capital" (JS, tras query 17) y `intereses-detalle/route.js` | Sin corregir |
+| 6 | 11 créditos `tipo='credito_libre'` en producción tienen la cuota placeholder mal formada (fecha y montos reales en vez de `2099-12-31`/`0`) — causa raíz de los riesgos #2 y #3. Pendiente decidir con el usuario si se resetean los datos | `cred_cuotas` de esos 11 productos (ver lista en [[Incidentes y Bugs Conocidos]]) | **Dato pendiente de decisión** |

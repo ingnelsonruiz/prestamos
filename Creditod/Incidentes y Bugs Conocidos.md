@@ -24,6 +24,21 @@
 
 ---
 
+## 🟣 Hallazgo crítico de integridad financiera — corregido 2026-08-05 (verificado contra la BD real)
+
+> A diferencia de los hallazgos de arriba (leídos solo en código), este se verificó ejecutando consultas de solo lectura directamente contra Supabase (proyecto `fecnicckenqlmpqefkth`), con autorización explícita del usuario. Los montos son reales de producción al momento de la revisión.
+
+**La mora y la cartera vencida que mostraba el dashboard estaban infladas en $87.777.732 (de $318.940.552 a $231.162.820 reales — una sobreestimación del 27,5%).**
+
+- **Causa raíz #1 — mismo patrón del bug de "clientes en mora" ya corregido en `/api/clientes`, pero nunca replicado a nivel de dashboard**: las queries 3 (`mora`) y 5 (`cartera_vencida`) de `GET /api/dashboard` sumaban `cu.monto_cuota - cu.monto_pagado` de **cualquier** cuota vencida sin excluir `p.estado IN ('saldado','decomisado','refinanciado')`. Como las cuotas de un crédito refinanciado nunca se cierran (quedan `pendiente` como registro histórico — ver [[Base de Datos]]), 54 cuotas de créditos ya refinanciados/saldados se contaban como mora vigente: **$35.583.932 de mora falsa**.
+- **Causa raíz #2 — créditos "Sin Cuotas Futuras" con la cuota placeholder mal formada**: se encontraron **11 productos `tipo='credito_libre'`** en producción cuya cuota NO sigue el patrón esperado (`fecha_vencimiento='2099-12-31'`, `abono_interes=0`) documentado en [[Créditos Sin Cuotas Futuras]] — en su lugar tienen una cuota con fecha de vencimiento real (algunas con más de 460 días de "vencidas") y montos de interés/capital reales, como si fueran préstamos normales de una sola cuota. Como el módulo de créditos libres define su propia mora por "días sin corte" (`creditos_libres_mora`), estas 11 cuotas nunca debieron contarse en la mora de cuotas — pero al no excluir `p.tipo='credito_libre'`, se sumaban igual: **$56.088.800 adicionales de mora falsa** (de los cuales $52.193.800 en productos con estado `activo`, que ni siquiera quedaban cubiertos por el fix de la causa raíz #1).
+- **Créditos afectados por la causa raíz #2** (requieren revisión de datos, no solo de código): CRED-000436, CRED-000455, CRED-000471\*, CRED-000506, CRED-000512\*, CRED-000518, CRED-000622, CRED-000623, CRED-000642, CRED-000650, CRED-000682 (\* ya refinanciados). Pendiente decidir con el usuario si estas cuotas se resetean al patrón placeholder estándar o si hay una razón de negocio para que existan así.
+- **Fix aplicado**: se agregó `JOIN cred_productos p` + `AND p.estado NOT IN ('saldado','decomisado','refinanciado') AND p.tipo != 'credito_libre'` a las queries 3 y 5 de `app/api/dashboard/route.js`. Verificado antes y después directamente contra la base de datos real (no solo leyendo el código).
+- **De paso, mismo día**: se detectó y corrigió también que la query 2 (`intereses de préstamos normales`) tampoco excluía `credito_libre`, causando doble conteo de interés cuando una de estas 11 cuotas mal formadas tenía un pago en el rango de fechas consultado (caso real detectado: $25.000 de doble conteo en el KPI "Intereses recogidos" del 04/08/2026, que fue el síntoma que llevó a descubrir todo este hallazgo).
+- **Patrón a vigilar**: cualquier query nueva sobre `cred_cuotas` que calcule mora/vencimiento debe (1) hacer JOIN a `cred_productos` y excluir `estado IN ('saldado','decomisado','refinanciado')`, y (2) excluir `tipo='credito_libre'` explícitamente — no basta con filtrar `fecha_vencimiento <> '2099-12-31'`, porque no todas las cuotas de créditos libres en esta base de datos siguen ese patrón.
+
+---
+
 ## 🟠 Inconsistencias de datos y riesgo de doble conteo — sin corregir aún
 
 | # | Hallazgo | Ubicación | Nota fuente |

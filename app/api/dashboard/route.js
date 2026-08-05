@@ -108,6 +108,14 @@ export async function GET(request) {
 
       // 2. Intereses cobrados por período
       //    LEAST(p.monto, cu.monto_cuota) evita sobrecontar en casos de sobrepago
+      //    ⚠️ Fix 2026-08-05: se agrega JOIN a cred_productos + WHERE p.tipo != 'credito_libre'.
+      //    Antes esta query no excluía credito_libre, y aunque su cuota placeholder
+      //    normalmente tiene abono_interes=0 (por lo que en la práctica solía dar 0),
+      //    se detectaron créditos libres reales en producción con cuotas mal formadas
+      //    (fecha_vencimiento real y abono_interes > 0, en vez del placeholder
+      //    2099-12-31/abono_interes=0 esperado) — su interés ya se cuenta correctamente
+      //    en `intereses_creditos_libres` (query 16, vía pg.monto_interes), así que sin
+      //    este filtro se contaba DOS VECES. Ver [[Incidentes y Bugs Conocidos]].
       query(`
         SELECT
           COALESCE(SUM(CASE WHEN p.fecha_pago::date = $1
@@ -122,10 +130,23 @@ export async function GET(request) {
             THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS rango
         FROM ${S}.cred_pagos p
         JOIN ${S}.cred_cuotas cu ON cu.id = p.cuota_id
+        JOIN ${S}.cred_productos prod ON prod.id = p.producto_id
+        WHERE prod.tipo != 'credito_libre'
       `, [hoy, desde, hasta]),
 
       // 3. Mora: clientes y montos por antigüedad
       //    Usa comparación de fechas — NO usa estado='mora' que no se auto-asigna
+      //    ⚠️ Fix 2026-08-05: se agrega JOIN a cred_productos con dos exclusiones que
+      //    faltaban (verificado en producción, ver [[Incidentes y Bugs Conocidos]]):
+      //    (a) p.estado NOT IN ('saldado','decomisado','refinanciado') — las cuotas de
+      //        créditos ya refinanciados/saldados NUNCA se cierran (quedan 'pendiente'
+      //        como registro histórico, ver [[Base de Datos]]) y sin este filtro se
+      //        contaban como mora vigente. Impacto medido: ~$35.6M de mora falsa.
+      //    (b) p.tipo != 'credito_libre' — este módulo define su propia mora por "días
+      //        sin corte" (ver creditos_libres_mora más abajo), no por fecha_vencimiento;
+      //        varios créditos libres en producción tienen la cuota placeholder mal
+      //        formada (fecha real en vez de 2099-12-31) y sin este filtro se contaban
+      //        también como mora de cuotas. Impacto medido: ~$56M adicionales.
       query(`
         SELECT
           COUNT(DISTINCT CASE WHEN cu.fecha_vencimiento < $1::date
@@ -151,7 +172,10 @@ export async function GET(request) {
             AND ($1::date - cu.fecha_vencimiento) > 60
             THEN cu.monto_cuota - cu.monto_pagado END), 0)                             AS monto_mas60d
         FROM ${S}.cred_cuotas cu
+        JOIN ${S}.cred_productos p ON p.id = cu.producto_id
         WHERE cu.fecha_vencimiento != '2099-12-31'
+          AND p.estado NOT IN ('saldado','decomisado','refinanciado')
+          AND p.tipo != 'credito_libre'
       `, [hoy]),
 
       // 4. Recaudo por período
@@ -169,6 +193,9 @@ export async function GET(request) {
       `, [hoy, desde, hasta]),
 
       // 5. Cartera vencida por antigüedad (comparación de fechas — NO estado='mora')
+      //    ⚠️ Fix 2026-08-05: mismo problema y mismo fix que la query 3 de arriba —
+      //    faltaba excluir productos ya cerrados y créditos libres. Ver comentario
+      //    detallado en la query 3 y en [[Incidentes y Bugs Conocidos]].
       query(`
         SELECT
           COALESCE(SUM(CASE WHEN cu.estado IN ('pendiente','parcial')
@@ -189,7 +216,10 @@ export async function GET(request) {
             AND cu.fecha_vencimiento < $1::date
             THEN cu.monto_cuota - cu.monto_pagado END), 0)                             AS total
         FROM ${S}.cred_cuotas cu
+        JOIN ${S}.cred_productos p ON p.id = cu.producto_id
         WHERE cu.fecha_vencimiento != '2099-12-31'
+          AND p.estado NOT IN ('saldado','decomisado','refinanciado')
+          AND p.tipo != 'credito_libre'
       `, [hoy]),
 
       // 6. Capital en la calle: suma de abono_capital pendiente en productos activos
@@ -493,10 +523,17 @@ export async function GET(request) {
         mes:    parseFloat(ip.mes)    + parseFloat(ir.mes    || 0) + parseFloat(il.mes    || 0),
         total:  parseFloat(ip.total)  + parseFloat(ir.total  || 0) + parseFloat(il.total  || 0),
         rango:  parseFloat(ip.rango)  + parseFloat(ir.rango  || 0) + parseFloat(il.rango  || 0),
-        // Desglose para trazabilidad
+        // Desglose para trazabilidad (histórico, sin filtro de rango)
         intereses_prestamos:      parseFloat(ip.total),
         intereses_retornos:       parseFloat(ir.total || 0),
         intereses_creditos_libres: parseFloat(il.total || 0),
+        // Desglose del RANGO seleccionado — para poder comparar 1:1 contra el
+        // modal de "Detalle de intereses recogidos" (normales/libres/retornos)
+        // categoría por categoría, no solo el total combinado. Agregado
+        // 2026-08-05 para diagnosticar diferencias entre el KPI y el detalle.
+        rango_prestamos:       parseFloat(ip.rango),
+        rango_retornos:        parseFloat(ir.rango || 0),
+        rango_creditos_libres: parseFloat(il.rango || 0),
       },
       mora: {
         clientes_total: mp.clientes_total,

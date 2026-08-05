@@ -94,10 +94,15 @@
 8. **`cliente_id` puede ser NULL** en `cred_productos`, `cred_cuotas` y `cred_pagos` desde las migraciones 23 y 25 — no asumir NOT NULL en código nuevo.
 9. **Nombres de clientes y empresas siempre en MAYÚSCULAS** — normalizar en backend antes de INSERT/UPDATE.
 10. **Cualquier agregación de capital/mora por cliente o por cartera debe excluir `p.estado IN ('saldado','decomisado','refinanciado')`** — de lo contrario se sobreconteo o falso-positivo de mora en créditos ya cerrados/refinanciados/unificados. Ver [[Incidentes y Bugs Conocidos]].
-11. **`cred_cuotas.abono_interes` es siempre `0` para `tipo='credito_libre'`** — su interés real se lee de `cred_pagos.monto_interes`, nunca de la cuota placeholder.
+11. **`cred_cuotas.abono_interes` DEBERÍA ser siempre `0` para `tipo='credito_libre'`, pero NO asumirlo en código nuevo** — se verificaron 11 productos en producción cuya cuota placeholder está mal formada (fecha real y montos reales en vez del patrón esperado). El interés real de créditos libres siempre se lee de `cred_pagos.monto_interes`, nunca de la cuota. Ver hallazgo crítico en [[Incidentes y Bugs Conocidos]].
+12. **Toda query que calcule mora/vencimiento sobre `cred_cuotas` debe excluir explícitamente `p.tipo='credito_libre'`** (además de excluir `estado IN ('saldado','decomisado','refinanciado')`, regla 10) — el filtro `fecha_vencimiento <> '2099-12-31'` NO es suficiente por sí solo, porque no todas las cuotas de créditos libres en esta base de datos siguen el patrón placeholder. Corregido en `GET /api/dashboard` (queries de mora y cartera vencida) el 2026-08-05 tras detectar $87.7M de mora falsa — ver [[Incidentes y Bugs Conocidos]].
 
 ---
 
 ## 🔴 Hallazgos de seguridad pendientes de corregir
 
 La revisión de código del 2026-08-05 encontró que **varios endpoints administrativos y destructivos no verifican rol de usuario**, incluyendo exportación/restauración de backup completo (con hashes de contraseña), gestión de usuarios, reverso masivo de interés fijo y lectura de auditoría. Ver el detalle completo, archivo por archivo, en [[Incidentes y Bugs Conocidos]] antes de tocar cualquiera de esos módulos — son riesgos reales verificados en el código fuente, no hipótesis.
+
+## 🟣 Hallazgo crítico de integridad financiera — corregido, pero con dato pendiente de revisar
+
+El mismo día se verificó contra la base de datos real que **la mora y cartera vencida del dashboard estaban infladas $87.777.732 (27,5%)** por dos causas: cuotas de créditos ya refinanciados que nunca se cierran, y 11 créditos "Sin Cuotas Futuras" con la cuota placeholder mal formada (fecha y montos reales en vez del patrón esperado). El código ya se corrigió. **Queda pendiente decidir con el usuario si esas 11 cuotas se resetean al patrón estándar** — ver detalle completo y la lista de créditos afectados en [[Incidentes y Bugs Conocidos]].
