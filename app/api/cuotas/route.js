@@ -30,7 +30,7 @@ export async function GET(request) {
              COALESCE(p.fecha_desembolso, p.fecha_primer_pago, p.fecha_creacion::DATE) AS fecha_desembolso_real,
              -- 2026-08-11: columnas separadas para distinguir en la UI "fecha de
              -- desembolso" (dinero entregado) de "fecha de pago" (cuota vencida/por
-             -- vencer). `fecha_desembolso_real` (arriba) mezcla ambos conceptos vía
+             -- vencer). fecha_desembolso_real (arriba) mezcla ambos conceptos vía
              -- COALESCE — correcto para la regla de 30 días de créditos libres (§24
              -- CLAUDE.md, no tocar), pero ambiguo si se muestra tal cual para un
              -- préstamo normal (mostraría la fecha de la primera cuota, no cuándo se
