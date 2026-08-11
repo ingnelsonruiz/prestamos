@@ -382,7 +382,7 @@ const DIAS = { diario: 1, semanal: 7, quincenal: 15, mensual: 30, anual: 360 }
 ### Cuotas
 | Método | Ruta | Notas |
 |--------|------|-------|
-| GET | `/api/cuotas?estado=&cliente_id=&producto_id=` | Incluye `telefono_cliente`, `fecha_creacion`, `monto_capital` del producto |
+| GET | `/api/cuotas?estado=&cliente_id=&producto_id=` | Incluye `telefono_cliente`, `fecha_creacion`, `monto_capital` del producto. También `fecha_desembolso_real` (COALESCE fecha_desembolso/fecha_primer_pago/fecha_creacion — usada por la regla de 30 días de créditos libres, §18/§24) y, desde 2026-08-11 (§25), `fecha_desembolso_mostrar` (COALESCE fecha_desembolso/fecha_creacion, **sin** fecha_primer_pago — desembolso real para UI) + `fecha_primer_pago_producto` (crudo) |
 
 ### Pagos
 | Método | Ruta | Notas |
@@ -1039,3 +1039,73 @@ Un crédito libre solo se considera **vencido** — y por tanto solo debe aparec
 ### Patrón a vigilar
 
 Cualquier vista nueva que trate créditos `credito_libre` como "vencidos" debe usar `creditoLibreVencido` (>30 días desde `fecha_desembolso_real`), nunca `fecha_vencimiento` (que siempre es el placeholder `2099-12-31` y no representa mora real). Y cualquier tarjeta/resumen que agrupe **todos los créditos de un cliente** para un tramo de cobro debe filtrar explícitamente los créditos libres vigentes — no basta con que el cliente "esté en la lista" por otro motivo.
+
+> **Nota (2026-08-11):** el badge `· desde {fecha}` descrito arriba ("Fecha de desembolso visible por crédito") fue **reemplazado** por dos etiquetas separadas ("Desembolso" / "Pago") — ver §25. El campo `fechaDesembolso` sigue existiendo pero ya no es la única fecha mostrada.
+
+---
+
+## 25. Fix — Desfase de fecha (UTC-5) y etiquetas ambiguas "desde" en `/cobros` — 2026-08-11
+
+### Bug 1: fechas mostradas un día antes de la real (desfase UTC-5)
+
+**Síntoma:** en el modal "Envío asistido" de `/cobros`, un crédito con `fecha_primer_pago = 2026-08-11` (hoy) se mostraba como "Préstamo · desde 10/08/2026" — un día antes. Verificado contra la BD (Supabase, proyecto `HERMANOS_LIÑAN`, `fecnicckenqlmpqefkth`): el dato real era correcto, el problema era de renderizado.
+
+**Causa raíz:** Postgres devuelve una columna `DATE`/`TIMESTAMP` como objeto `Date` en medianoche UTC; al serializarse en `NextResponse.json()` queda como `"2026-08-11T00:00:00.000Z"`. Cuatro puntos de `app/cobros/page.js` hacían `new Date(fechaSinHora).toLocaleDateString('es-CO')` **sin** fijar mediodía local — en el navegador del cobrador (Bogotá, UTC-5) esto interpreta el instante UTC y lo convierte a `2026-08-10T19:00:00-05:00`, corriendo la fecha un día hacia atrás. Es el mismo patrón de desfase que `CLAUDE.md` ya documenta en §10/§14/§18/§19, pero aquí no se aplicó la convención `+'T12:00:00'`.
+
+**Puntos corregidos en `app/cobros/page.js`:**
+- `fmtFechaCorta` (badge "· desde {fecha}" y "Último pago: ... el {fecha}"): ahora hace `new Date(s.split('T')[0] + 'T12:00:00')`.
+- `abrirModalWA` (mensaje individual de mora por WhatsApp — **este era el más grave, mostraba fecha de vencimiento equivocada al cliente**): se reemplazó el parseo manual por los helpers ya existentes `fvDe`/`diasDesde` (que sí usaban la convención correcta).
+- Acordeón móvil de cuotas y tabla desktop de cuotas (ambos mostraban `fecha_vencimiento` con el mismo antipatrón): ahora usan `new Date(fvDe(c) + 'T12:00:00')`.
+
+**Patrón a vigilar:** cualquier `new Date(x).toLocaleDateString(...)` en este archivo (o en cualquier componente cliente) donde `x` sea una fecha sin hora explícita (`DATE` de Postgres, o un string `"YYYY-MM-DD"`) debe pasar primero por `.split('T')[0] + 'T12:00:00'`. Los helpers `fvDe`/`diasDesde`/`fdDe`/`diasDesdeDesembolso` ya existentes en `app/cobros/page.js` aplican esto correctamente — reutilizarlos en vez de parsear fechas a mano es la forma de no repetir el bug.
+
+### Bug 2 (UX, no técnico): la etiqueta "desde {fecha}" se confundía con "fecha en que se hizo el préstamo"
+
+**Problema:** el badge `· desde {fecha}` (agregado en §24) usaba `fecha_desembolso_real = COALESCE(fecha_desembolso, fecha_primer_pago, fecha_creacion)` — fórmula pensada para la regla de 30 días de créditos libres (§18/§24), donde `fecha_primer_pago` sí es la fecha de inicio real. Pero para un préstamo normal sin `fecha_desembolso` explícito (la mayoría, ver §19), esa fórmula prioriza `fecha_primer_pago` — es decir, el badge mostraba la fecha de la **primera cuota**, no la fecha en que se entregó el dinero. Como el badge solo decía "desde", el cobrador no podía distinguir cuál de los dos conceptos estaba viendo.
+
+**Fix:**
+- `app/api/cuotas/route.js` (GET): se agregaron dos columnas nuevas al SELECT, **sin tocar** `fecha_desembolso_real` (la regla de 30 días de créditos libres depende de ella tal cual):
+  - `fecha_desembolso_mostrar` = `COALESCE(p.fecha_desembolso, p.fecha_creacion::DATE)` — desembolso real, misma prioridad que ya usa `/prestamos/[id]` (fecha_desembolso > fecha_creacion, **sin** `fecha_primer_pago` de por medio).
+  - `fecha_primer_pago_producto` = `p.fecha_primer_pago` crudo.
+- `app/cobros/page.js`:
+  - `cargar()`: el objeto agrupado por producto ahora guarda `fecha_desembolso_mostrar` y `fecha_primer_pago` además del `fecha_desembolso` (`fecha_desembolso_real`) que ya existía.
+  - `iniciarEnvio()`: cada producto calcula **dos** fechas independientes — `fechaDesembolso` (desembolso real; para `credito_libre` se conserva `fecha_desembolso_real`, porque ese módulo no tiene "próxima cuota") y `fechaPago` (la cuota pendiente más próxima dentro de `relevantes`, excluyendo la placeholder `2099-12-31` de fiado/adelanto vía `enRuta`).
+  - Chip del modal "Envío asistido": pasó de `· desde {fecha}` a `· Desembolso: {fecha} · Pago: {fecha}` (cada fecha se omite si no aplica, ej. crédito recién creado sin cuotas vencidas todavía no muestra "Pago").
+
+**Alcance:** cambio de UI + una fórmula adicional en un endpoint ya existente — no se tocó ninguna tabla, ninguna migración SQL, ni la regla de 30 días de créditos libres.
+
+### Lección de implementación: backticks de markdown dentro de un template literal SQL rompen el build
+
+Al documentar el cambio anterior con un comentario SQL (`-- ...`) dentro del template literal `` sql = `...` `` de `app/api/cuotas/route.js`, se usaron backticks de markdown (`` `fecha_desembolso_real` ``) para resaltar un nombre de columna. Como todo el bloque SQL ya está envuelto en backticks (es un template literal de JS), esos backticks internos sin escapar **cierran el template literal antes de tiempo** y rompen el archivo — Vercel falló el build con `Error: Expected a semicolon` apuntando justo a esa línea.
+
+**Patrón a vigilar:** nunca usar backticks (`` ` ``) dentro de un comentario `-- ...` que viva dentro de un template literal de SQL en JS/TS. Si se necesita resaltar un nombre de columna en un comentario ahí, usar comillas simples o ninguna comilla. Además, `node --check archivo.js` **no es confiable** para detectar este tipo de error en archivos con `import`/`export` (ESM) — dio un falso "OK" en este caso. Verificación más fiel usada después: `node --input-type=module --check < archivo.js` para módulos sin JSX, y `@babel/parser` con el plugin `jsx` para archivos de página (`.js` con JSX).
+
+---
+
+## 26. Exportar Excel — una hoja por cliente (`/backup`) — 2026-08-11
+
+Nuevo botón **"📊 Exportar Excel (por cliente)"** en `/backup`, junto al backup `.json` existente. A diferencia del backup JSON (que es para *restaurar* la base), este Excel es para **revisar/compartir la cartera de forma legible** — no se puede restaurar desde él.
+
+### Qué contiene
+
+Un archivo `.xlsx` con una hoja **"Índice"** primero (lista de los 373 clientes con documento, teléfono, dirección, # de créditos y el nombre exacto de su hoja) y luego **una hoja por cliente**, cada una con:
+- Datos del cliente (nombre, documento, teléfono, dirección, email).
+- Por cada crédito del cliente: referencia, tipo (con label/ícono dinámico de `cred_tipos_prestamo`, vía `GET /api/configuracion/tipos`), capital, tasa, estado, método de cálculo, fecha de desembolso, fecha de la primera cuota, medio de desembolso, notas.
+- Tabla de **cuotas** completa del crédito (#, vencimiento, valor, interés, capital, pagado, estado).
+- Tabla de **pagos** completa del crédito (fecha, monto, interés, capital, método, recibo, notas).
+
+Si un cliente no tiene créditos, o un crédito no tiene cuotas/pagos aún, la hoja lo indica explícitamente (`Sin créditos registrados` / `Sin cuotas registradas` / `Sin pagos registrados`) en vez de dejar espacio en blanco ambiguo.
+
+### Implementación (`app/backup/page.js`)
+
+- **No se creó ningún endpoint nuevo.** `exportarExcel()` reutiliza `GET /api/backup` (el mismo que ya genera el backup JSON, ya registra el evento en `cred_backups` y en la auditoría) — solo toma `data.tablas.clientes/productos/cuotas/pagos` del JSON y descarta el resto (caja, historial, config, usuarios). Evita duplicar las 8 consultas SQL en un segundo endpoint.
+- Agrupa `productos` por `cliente_id`, `cuotas` y `pagos` por `producto_id` en objetos-mapa antes de iterar clientes (evita recorrer los arrays completos una vez por cliente).
+- **Nombres de hoja únicos y válidos**: Excel limita los nombres de hoja a 31 caracteres y prohíbe `: \ / ? * [ ]`. `nombreHojaUnico()` sanitiza el nombre del cliente, y si hay colisión (nombres repetidos entre los 373 clientes) agrega los últimos 4 dígitos del documento o un sufijo numérico `(2)`, `(3)`, etc.
+- **Fechas**: se creó `fmtSoloFecha()` (helper nuevo en este archivo) que aplica la misma convención `+'T12:00:00'` corregida en `/cobros` (§25) — todas las fechas de este Excel (desembolso, primera cuota, vencimiento de cuota, fecha de pago) están protegidas contra el mismo desfase UTC-5 desde el día uno, no se reintrodujo el bug.
+- Usa `XLSX.utils.aoa_to_sheet` (array de arrays) — mismo patrón ya usado en `exportarRuta` de `/cobros` y en `/informes`, no una librería nueva.
+
+### Alcance y límites conocidos
+
+- Con 373 clientes activos hoy, el archivo genera 374 hojas (373 + Índice). Es manejable pero pesado de abrir en equipos con poca RAM — si la cartera crece significativamente, considerar paginar por fecha o generar el archivo en el servidor en vez de en el navegador.
+- El Excel se genera 100% en el navegador (igual que los demás export de este sistema) — para 373 clientes con miles de cuotas/pagos esto puede tardar unos segundos; no hay barra de progreso, solo el texto del botón ("⏳ Generando Excel...").
+- **Hallazgo de seguridad relacionado, no corregido en este cambio:** al revisar `app/api/backup/route.js` se encontró que la función `verificarAdmin()` (línea ~10) está definida pero **nunca se llama** — ni `GET` (exportar) ni `POST` (restaurar) verifican `rol === 'admin'`, solo que exista un usuario autenticado (`getUsuarioDesdeRequest`). Cualquier usuario con rol `operador` que llame directamente a estos endpoints (sin pasar por el botón de la UI) podría exportar el backup completo (incluye `password_hash` de usuarios) o **restaurar/reemplazar toda la base de datos**. Pendiente de decisión del dueño del sistema: agregar `if (!u?.rol || u.rol !== 'admin') return 403` en ambos handlers.

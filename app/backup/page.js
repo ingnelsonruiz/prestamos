@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
+import * as XLSX from 'xlsx'
 
 const fmt = n => Number(n).toLocaleString('es-CO')
 const fmtFecha = iso => {
@@ -8,6 +9,16 @@ const fmtFecha = iso => {
   return d.toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' }) +
     ' ' + d.toLocaleTimeString('es-CO', { hour:'2-digit', minute:'2-digit' })
 }
+// Solo fecha (sin hora) — SIEMPRE fijando mediodía local antes de formatear.
+// Postgres serializa DATE/TIMESTAMP como medianoche UTC; sin este ancla, en
+// Bogotá (UTC-5) `toLocaleDateString` corre la fecha un día hacia atrás
+// (mismo bug corregido en app/cobros/page.js el 2026-08-11, ver CLAUDE.md §25).
+const fmtSoloFecha = iso => {
+  if (!iso) return '—'
+  return new Date(String(iso).split('T')[0] + 'T12:00:00').toLocaleDateString('es-CO')
+}
+// Monto numérico → string localizado; vacío si no hay valor (evita "NaN" en la celda).
+const fmtMonto = n => (n === null || n === undefined || n === '') ? '' : fmt(n)
 
 export default function BackupPage() {
   const [historial,     setHistorial]     = useState([])
@@ -17,6 +28,7 @@ export default function BackupPage() {
   const [archivoInfo,   setArchivoInfo]   = useState(null)   // { data, nombre, fecha, conteos }
   const [error,         setError]         = useState('')
   const [exito,         setExito]         = useState('')
+  const [generandoExcel, setGenerandoExcel] = useState(false)
   const fileRef = useRef()
 
   // ── Recrear estructura ────────────────────────────────────────────────────
@@ -49,6 +61,156 @@ export default function BackupPage() {
       setError(e.message)
     } finally {
       setCargando(false)
+    }
+  }
+
+  // ── Exportar Excel — una hoja por cliente ────────────────────────────────
+  // Reutiliza GET /api/backup (mismo endpoint del backup JSON, ya audita y
+  // registra en cred_backups) para no duplicar consultas SQL. Cada hoja trae
+  // los créditos del cliente con su tabla de cuotas y de pagos completa —
+  // es un respaldo legible en Excel, no solo una copia restaurable en JSON.
+  const exportarExcel = async () => {
+    setGenerandoExcel(true); setError(''); setExito('')
+    try {
+      const [resBackup, resTipos] = await Promise.all([
+        fetch('/api/backup'),
+        fetch('/api/configuracion/tipos'),
+      ])
+      if (!resBackup.ok) { const d = await resBackup.json(); throw new Error(d.error) }
+      const data  = await resBackup.json()
+      const tipos = resTipos.ok ? await resTipos.json() : []
+
+      const tipoLabel = {}
+      ;(Array.isArray(tipos) ? tipos : []).forEach(t => {
+        tipoLabel[t.codigo] = `${t.icono || ''} ${t.label || t.codigo}`.trim()
+      })
+
+      const { clientes, productos, cuotas, pagos } = data.tablas || {}
+      if (!Array.isArray(clientes)) throw new Error('El backup no trajo la lista de clientes.')
+
+      // Agrupar productos/cuotas/pagos por su respectivo padre — evita
+      // recorrer los arrays completos una vez por cliente (O(n) en vez de O(n²)).
+      const productosPorCliente = {}
+      ;(productos || []).forEach(p => (productosPorCliente[p.cliente_id] ??= []).push(p))
+      const cuotasPorProducto = {}
+      ;(cuotas || []).forEach(c => (cuotasPorProducto[c.producto_id] ??= []).push(c))
+      const pagosPorProducto = {}
+      ;(pagos || []).forEach(p => (pagosPorProducto[p.producto_id] ??= []).push(p))
+
+      // Nombres de hoja de Excel: máx. 31 caracteres, sin : \ / ? * [ ], y
+      // únicos (con 373 clientes puede haber nombres repetidos o similares).
+      const nombresUsados = new Set()
+      const nombreHojaUnico = (nombreCliente, documento) => {
+        let base = String(nombreCliente || 'CLIENTE').replace(/[:\\/?*[\]]/g, ' ').replace(/\s+/g, ' ').trim()
+        if (!base) base = 'CLIENTE'
+        let candidato = base.slice(0, 31)
+        if (nombresUsados.has(candidato)) {
+          const doc4 = String(documento || '').slice(-4)
+          const suf  = doc4 ? ` ${doc4}` : ''
+          candidato = `${base.slice(0, 31 - suf.length)}${suf}`.trim()
+        }
+        let i = 2
+        while (nombresUsados.has(candidato)) {
+          const suf = ` (${i})`
+          candidato = `${base.slice(0, 31 - suf.length)}${suf}`
+          i++
+        }
+        nombresUsados.add(candidato)
+        return candidato
+      }
+
+      const wb = XLSX.utils.book_new()
+      const indice = [['Cliente', 'Documento', 'Teléfono', 'Dirección', '# Créditos', 'Hoja']]
+
+      const clientesOrdenados = [...clientes].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
+
+      clientesOrdenados.forEach(cli => {
+        const propios = (productosPorCliente[cli.id] || [])
+          .slice()
+          .sort((a, b) => new Date(a.fecha_creacion) - new Date(b.fecha_creacion))
+
+        const aoa = [
+          ['CLIENTE', cli.nombre || ''],
+          ['Documento', cli.documento || '', 'Teléfono', cli.telefono || '', 'Dirección', cli.direccion || '', 'Email', cli.email || ''],
+          [],
+        ]
+
+        if (propios.length === 0) {
+          aoa.push(['Sin créditos registrados'])
+        } else {
+          propios.forEach(p => {
+            aoa.push([
+              'CRÉDITO', p.referencia || p.id,
+              'Tipo', tipoLabel[p.tipo] || p.tipo,
+              'Estado', p.estado || '',
+            ])
+            aoa.push([
+              'Capital', fmtMonto(p.monto_capital),
+              'Tasa', p.tasa_interes != null ? `${p.tasa_interes}% ${p.periodo_tasa || ''}`.trim() : '',
+              'Método cálculo', p.metodo_calculo || '',
+            ])
+            aoa.push([
+              'Fecha de desembolso', fmtSoloFecha(p.fecha_desembolso || p.fecha_creacion),
+              'Fecha de pago (1ª cuota)', fmtSoloFecha(p.fecha_primer_pago),
+              'Medio de desembolso', p.metodo_desembolso || '',
+            ])
+            if (p.notas) aoa.push(['Notas', p.notas])
+
+            const cuotasP = (cuotasPorProducto[p.id] || []).slice().sort((a, b) => (a.numero_cuota || 0) - (b.numero_cuota || 0))
+            aoa.push([])
+            aoa.push(['Cuotas'])
+            aoa.push(['#', 'Vencimiento', 'Valor cuota', 'Interés', 'Capital', 'Pagado', 'Estado'])
+            if (cuotasP.length === 0) {
+              aoa.push(['Sin cuotas registradas'])
+            } else {
+              cuotasP.forEach(c => aoa.push([
+                c.numero_cuota,
+                fmtSoloFecha(c.fecha_vencimiento),
+                fmtMonto(c.monto_cuota), fmtMonto(c.abono_interes), fmtMonto(c.abono_capital), fmtMonto(c.monto_pagado),
+                c.estado || '',
+              ]))
+            }
+
+            const pagosP = (pagosPorProducto[p.id] || []).slice().sort((a, b) => new Date(a.fecha_pago) - new Date(b.fecha_pago))
+            aoa.push([])
+            aoa.push(['Pagos'])
+            aoa.push(['Fecha', 'Monto', 'Interés', 'Capital', 'Método', 'Recibo', 'Notas'])
+            if (pagosP.length === 0) {
+              aoa.push(['Sin pagos registrados'])
+            } else {
+              pagosP.forEach(pg => aoa.push([
+                fmtSoloFecha(pg.fecha_pago),
+                fmtMonto(pg.monto), fmtMonto(pg.monto_interes), fmtMonto(pg.monto_capital),
+                pg.metodo_pago || '', pg.numero_recibo || '', pg.notas || '',
+              ]))
+            }
+            aoa.push([]); aoa.push([])   // separador entre créditos del mismo cliente
+          })
+        }
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa)
+        ws['!cols'] = [{ wch: 22 }, { wch: 20 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 14 }]
+
+        const nombreHoja = nombreHojaUnico(cli.nombre, cli.documento)
+        XLSX.utils.book_append_sheet(wb, ws, nombreHoja)
+        indice.push([cli.nombre || '', cli.documento || '', cli.telefono || '', cli.direccion || '', propios.length, nombreHoja])
+      })
+
+      // Hoja "Índice" al inicio, con la lista completa y el nombre de hoja de
+      // cada cliente — con 373 clientes, navegar solo por pestañas es lento.
+      const wsIndice = XLSX.utils.aoa_to_sheet(indice)
+      wsIndice['!cols'] = [{ wch: 32 }, { wch: 16 }, { wch: 14 }, { wch: 28 }, { wch: 10 }, { wch: 31 }]
+      XLSX.utils.book_append_sheet(wb, wsIndice, 'Índice')
+      wb.SheetNames.unshift(wb.SheetNames.pop())   // mover "Índice" de última a primera posición
+
+      const fecha = new Date().toISOString().slice(0, 10)
+      XLSX.writeFile(wb, `Backup_Clientes_${fecha}.xlsx`)
+      setExito(`✅ Excel generado: ${clientesOrdenados.length} clientes, ${(productos || []).length} créditos, ${(cuotas || []).length} cuotas, ${(pagos || []).length} pagos.`)
+      cargarHistorial()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setGenerandoExcel(false)
     }
   }
 
@@ -163,11 +325,22 @@ export default function BackupPage() {
               ))}
             </div>
           </div>
-          <button onClick={exportar} disabled={cargando}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold px-5 py-3 rounded-lg transition-colors whitespace-nowrap">
-            {cargando ? '⏳ Generando...' : '⬇️ Descargar backup'}
-          </button>
+          <div className="flex flex-col gap-2">
+            <button onClick={exportar} disabled={cargando}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-semibold px-5 py-3 rounded-lg transition-colors whitespace-nowrap">
+              {cargando ? '⏳ Generando...' : '⬇️ Descargar backup (.json)'}
+            </button>
+            <button onClick={exportarExcel} disabled={generandoExcel}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-semibold px-5 py-3 rounded-lg transition-colors whitespace-nowrap">
+              {generandoExcel ? '⏳ Generando Excel...' : '📊 Exportar Excel (por cliente)'}
+            </button>
+          </div>
         </div>
+        <p className="text-xs text-gray-400 mt-3">
+          El Excel trae una hoja por cliente (créditos, cuotas y pagos completos) más una hoja "Índice" — útil para revisar
+          o compartir la cartera de forma legible. El backup <code className="bg-gray-100 px-1 rounded">.json</code> sigue
+          siendo el único archivo que este sistema puede <strong>restaurar</strong>.
+        </p>
       </div>
 
       {/* ── Historial ────────────────────────────────────────────────────── */}
