@@ -90,6 +90,11 @@ function CobrosContent() {
           empresa_id:     c.empresa_id,
           empresa_nombre: c.empresa_nombre,
           fecha_desembolso: c.fecha_desembolso_real,
+          // 2026-08-11: fecha real de entrega del dinero (fecha_desembolso >
+          // fecha_creacion, SIN fecha_primer_pago) — para no confundirla en la UI
+          // con la fecha de la primera/próxima cuota (ver iniciarEnvio más abajo).
+          fecha_desembolso_mostrar: c.fecha_desembolso_mostrar,
+          fecha_primer_pago: c.fecha_primer_pago_producto,
           cuotas: []
         }
       }
@@ -336,7 +341,10 @@ function CobrosContent() {
     k === 'manana' ? bucketDe.manana :
     k === 'semana' ? bucketDe.semana : bucketDe.quince
 
-  const fmtFechaCorta = s => s ? new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
+  // Bug 2026-08-11: `s` viene como fecha DATE serializada por pg (medianoche UTC).
+  // Sin fijar mediodía local, en Bogotá (UTC-5) se corre un día hacia atrás al
+  // formatear (mismo patrón de desfase documentado en CLAUDE.md §10/§14/§18).
+  const fmtFechaCorta = s => s ? new Date(s.split('T')[0] + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
 
   // Mensaje con el mismo detalle que ya trae el recibo impreso (REC-XXXXXX):
   // capital prestado, saldo de capital pendiente y último pago (monto + fecha),
@@ -397,6 +405,19 @@ function CobrosContent() {
         const esTramo     = tramoCuotas.length > 0
         // Crédito del tramo → solo sus cuotas del tramo; otros créditos → todo su saldo
         const relevantes  = esTramo ? tramoCuotas : g.cuotas
+        const esLibre = g.tipo === 'credito_libre'
+        // 2026-08-11: se separan dos fechas que antes se mostraban mezcladas en un
+        // solo badge "· desde {fecha}", generando confusión (parecía la fecha en
+        // que se hizo el préstamo, pero para créditos sin fecha_desembolso propia
+        // en realidad mostraba la fecha de la primera cuota). Ahora:
+        // - fechaDesembolso: cuándo se entregó el dinero (fecha_desembolso >
+        //   fecha_creacion). Para crédito_libre se conserva g.fecha_desembolso,
+        //   que ya usa fecha_primer_pago como "fecha de inicio" (§18 CLAUDE.md) —
+        //   ese módulo no tiene un concepto de "próxima cuota".
+        // - fechaPago: la cuota pendiente más próxima (excluye la placeholder
+        //   2099 de fiado/adelanto) — explica por qué el crédito cayó en este tramo.
+        const fechaDesembolso = esLibre ? g.fecha_desembolso : (g.fecha_desembolso_mostrar || g.fecha_desembolso)
+        const proximaCuota = relevantes.find(enRuta)
         return {
           producto_id: g.producto_id,
           tipo: g.tipo, descripcion: g.descripcion, esTramo,
@@ -406,7 +427,8 @@ function CobrosContent() {
           // mismo par de cifras que ya muestra el recibo impreso.
           capital: parseFloat(g.capital || 0),
           saldoCapital: g.cuotas.reduce((s, c) => s + capitalPend(c), 0),
-          fechaDesembolso: g.fecha_desembolso,
+          fechaDesembolso,
+          fechaPago: !esLibre && proximaCuota ? fvDe(proximaCuota) : null,
           // Un crédito libre solo es deuda "exigible" si lleva más de 30 días
           // desde el desembolso (misma regla de `cuotasCreditoLibrePendientes`).
           // Si el cliente cayó en este tramo por OTRO crédito (ej. un préstamo
@@ -539,8 +561,10 @@ function CobrosContent() {
     const totalTodo  = g.cuotas.reduce((s,c) => s + pendiente(c), 0)
 
     const lineasCuotas = cuotasMora.map(c => {
-      const fv = new Date(c.fecha_vencimiento).toLocaleDateString('es-CO')
-      const dias = Math.floor((new Date() - new Date(c.fecha_vencimiento)) / 86400000)
+      // Bug 2026-08-11: mismo desfase UTC-5 — se reutilizan los helpers fvDe/diasDesde
+      // (ya corregidos con 'T12:00:00') en vez de parsear fecha_vencimiento a mano.
+      const fv = new Date(fvDe(c) + 'T12:00:00').toLocaleDateString('es-CO')
+      const dias = diasDesde(c)
       return `  • Cuota #${c.numero_cuota} — Venció el ${fv} (${dias} día${dias !== 1 ? 's' : ''} de mora)\n    Valor pendiente: ${fmt(pendiente(c))}`
     }).join('\n')
 
@@ -901,7 +925,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                             }
                             {g.tipo !== 'fiado' && (
                               <p className={`text-xs mt-0.5 ${esMora(c) ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                                📅 {new Date(c.fecha_vencimiento).toLocaleDateString('es-CO')}
+                                📅 {new Date(fvDe(c) + 'T12:00:00').toLocaleDateString('es-CO')}
                                 {esMora(c) && ' · ⚠️ mora'}
                                 {esFutura(c) && ' · anticipado'}
                               </p>
@@ -980,7 +1004,7 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                             {g.tipo === 'fiado'
                               ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Sin fecha fija</span>
                               : <span className={esMora(c) ? 'text-red-600 font-semibold' : esFutura(c) ? 'text-blue-500 text-xs' : ''}>
-                                  {new Date(c.fecha_vencimiento).toLocaleDateString('es-CO')}
+                                  {new Date(fvDe(c) + 'T12:00:00').toLocaleDateString('es-CO')}
                                   {esMora(c)   && <span className="ml-1 text-xs bg-red-100 text-red-600 px-1 rounded">mora</span>}
                                   {esFutura(c) && <span className="ml-1 text-xs bg-blue-100 text-blue-600 px-1 rounded">anticipado</span>}
                                 </span>
@@ -1847,7 +1871,11 @@ Para cualquier acuerdo de pago comuníquese con nosotros. ¡Gracias! 🙏`
                             <span key={p.producto_id} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${
                               p.tipo === 'credito_libre' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
                               {tipoIcon[p.tipo] || '📄'} {p.tipo === 'credito_libre' ? 'Sin fecha fija' : (tipoLabel[p.tipo] || p.tipo)}
-                              {p.fechaDesembolso && ` · desde ${fmtFechaCorta(p.fechaDesembolso)}`}
+                              {/* 2026-08-11: etiquetas explícitas — antes un solo "· desde {fecha}"
+                                  se confundía con "fecha en que se hizo el préstamo". Ahora se separan
+                                  desembolso (dinero entregado) y pago (próxima cuota pendiente). */}
+                              {p.fechaDesembolso && ` · Desembolso: ${fmtFechaCorta(p.fechaDesembolso)}`}
+                              {p.fechaPago && ` · Pago: ${fmtFechaCorta(p.fechaPago)}`}
                             </span>
                           ))}
                           {cl.telefono

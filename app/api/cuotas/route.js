@@ -28,6 +28,16 @@ export async function GET(request) {
              p.num_cuotas       AS num_cuotas_producto,
              p.metodo_calculo   AS metodo_calculo_producto,
              COALESCE(p.fecha_desembolso, p.fecha_primer_pago, p.fecha_creacion::DATE) AS fecha_desembolso_real,
+             -- 2026-08-11: columnas separadas para distinguir en la UI "fecha de
+             -- desembolso" (dinero entregado) de "fecha de pago" (cuota vencida/por
+             -- vencer). `fecha_desembolso_real` (arriba) mezcla ambos conceptos vía
+             -- COALESCE — correcto para la regla de 30 días de créditos libres (§24
+             -- CLAUDE.md, no tocar), pero ambiguo si se muestra tal cual para un
+             -- préstamo normal (mostraría la fecha de la primera cuota, no cuándo se
+             -- entregó el dinero). Ver /prestamos/[id] para la misma prioridad
+             -- (fecha_desembolso > fecha_creacion, sin fecha_primer_pago de por medio).
+             COALESCE(p.fecha_desembolso, p.fecha_creacion::DATE) AS fecha_desembolso_mostrar,
+             p.fecha_primer_pago AS fecha_primer_pago_producto,
              p.empresa_id       AS empresa_id,
              ep.nombre          AS empresa_nombre,
              GREATEST(0, CURRENT_DATE - cu.fecha_vencimiento) AS dias_mora
