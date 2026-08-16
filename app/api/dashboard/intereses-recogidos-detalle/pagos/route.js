@@ -49,8 +49,14 @@ export async function GET(request) {
     let pagos = []
 
     if (tipo === 'normal') {
-      // Misma fórmula de prorrateo que la query "normales" de la ruta hermana,
-      // aquí por pago individual (una fila por recibo) en vez de agregada.
+      // ⚠️ Fix 2026-08-16: antes se prorrateaba con LEAST(pg.monto, cu.monto_cuota) *
+      // cu.abono_interes / cu.monto_cuota — mismo bug que la query "normales" de la
+      // ruta hermana (../route.js): cu.monto_cuota es mutable y recalcularCuotasPlano()
+      // lo reescribe (inflado) después de cada pago en método 'plano'. Ahora se usa
+      // directo pg.monto_interes (interés real "pactado al momento del cobro",
+      // inmutable). cu.numero_cuota/monto_cuota/abono_interes/estado se conservan en
+      // el SELECT solo como información de contexto para la UI, ya no participan del
+      // cálculo. Ver detalle completo en [[Incidentes y Bugs Conocidos]].
       const params = [productoId]
       let filtroRango = ''
       if (hayRango) {
@@ -62,8 +68,7 @@ export async function GET(request) {
                pg.monto AS monto_pago, pg.metodo_pago, pg.usuario_nombre, pg.notas,
                cu.numero_cuota, cu.monto_cuota, cu.abono_interes AS abono_interes_cuota,
                cu.estado AS estado_cuota,
-               ROUND((LEAST(pg.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0))::numeric, 2)
-                 AS interes_prorrateado
+               ROUND(pg.monto_interes::numeric, 2) AS interes_prorrateado
         FROM ${S}.cred_pagos pg
         JOIN ${S}.cred_cuotas cu ON cu.id = pg.cuota_id
         WHERE pg.producto_id = $1

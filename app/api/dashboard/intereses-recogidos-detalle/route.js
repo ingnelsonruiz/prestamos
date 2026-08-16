@@ -25,11 +25,19 @@ export async function GET(request) {
     const params = hayRango ? [desde, hasta] : []
 
     // ── Créditos normales (préstamo, venta, empeño, fiado, adelanto, congelación) ──
-    // El interés cobrado se prorratea desde la cuota (cu.abono_interes / cu.monto_cuota),
-    // que sí refleja el interés real de estos productos.
-    // Excluye 'credito_libre' explícitamente: su cuota es un placeholder con
-    // abono_interes=0 fijo (nunca se actualiza al abonar), así que esta fórmula
-    // siempre daría 0 para ese tipo — ver Query separada abajo.
+    // ⚠️ Fix 2026-08-16: antes el interés cobrado se prorrateaba desde la cuota
+    // (LEAST(pg.monto, cu.monto_cuota) * cu.abono_interes / cu.monto_cuota). Esa fórmula
+    // usa el estado ACTUAL (mutable) de cu.monto_cuota/abono_interes, que en método
+    // 'plano' recalcularCuotasPlano() reescribe después de cada pago del crédito —
+    // al cerrarse una cuota "solo intereses" el capital se redistribuye entre menos
+    // cuotas restantes, inflando su monto_cuota. Un pago 100% interés terminaba
+    // prorrateado a una fracción mínima (caso real: CRED-000309, pago de $1.000.000
+    // 100% interés mostrado como $130.435 — ver [[Incidentes y Bugs Conocidos]]).
+    // cred_pagos.monto_interes ya guarda el interés real "pactado al momento del
+    // cobro" y NO varía con recálculos posteriores — se usa directo, mismo patrón
+    // que ya usaba (correctamente) la query de créditos libres de abajo.
+    // Excluye 'credito_libre' explícitamente porque ese tipo se agrega en su propia
+    // sección con su propio filtro (pg.monto_interes > 0) — ver Query separada abajo.
     // LEFT JOIN a cred_clientes (no INNER): cliente_id es nullable desde la
     // migración 25 en préstamos internos de empresas propias; se resuelve el
     // nombre a la empresa dueña del préstamo en ese caso.
@@ -44,11 +52,8 @@ export async function GET(request) {
         p.monto_capital,
         COUNT(pg.id)::int   AS num_pagos,
         MAX(pg.fecha_pago::date)::text AS ultimo_pago,
-        COALESCE(SUM(
-          LEAST(pg.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)
-        ), 0) AS interes_cobrado
+        COALESCE(SUM(pg.monto_interes), 0) AS interes_cobrado
       FROM ${S}.cred_pagos pg
-      JOIN ${S}.cred_cuotas    cu ON cu.id = pg.cuota_id
       JOIN ${S}.cred_productos p  ON p.id  = pg.producto_id
       LEFT JOIN ${S}.cred_clientes c  ON c.id  = pg.cliente_id
       LEFT JOIN ${S}.cred_empresas_propias ep ON ep.id = p.empresa_id AND p.es_prestamo_interno = TRUE
@@ -56,7 +61,7 @@ export async function GET(request) {
         ${filtroRangoNormales}
       GROUP BY COALESCE(c.id, ep.id), COALESCE(c.nombre, ep.nombre), COALESCE(c.documento, ep.codigo),
                p.id, p.referencia, p.tipo, p.monto_capital
-      HAVING SUM(LEAST(pg.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) > 0
+      HAVING SUM(pg.monto_interes) > 0
       ORDER BY interes_cobrado DESC
     `, params)
 

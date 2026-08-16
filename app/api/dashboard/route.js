@@ -107,29 +107,34 @@ export async function GET(request) {
       `),
 
       // 2. Intereses cobrados por período
-      //    LEAST(p.monto, cu.monto_cuota) evita sobrecontar en casos de sobrepago
-      //    ⚠️ Fix 2026-08-05: se agrega JOIN a cred_productos + WHERE p.tipo != 'credito_libre'.
-      //    Antes esta query no excluía credito_libre, y aunque su cuota placeholder
-      //    normalmente tiene abono_interes=0 (por lo que en la práctica solía dar 0),
-      //    se detectaron créditos libres reales en producción con cuotas mal formadas
-      //    (fecha_vencimiento real y abono_interes > 0, en vez del placeholder
-      //    2099-12-31/abono_interes=0 esperado) — su interés ya se cuenta correctamente
-      //    en `intereses_creditos_libres` (query 16, vía pg.monto_interes), así que sin
-      //    este filtro se contaba DOS VECES. Ver [[Incidentes y Bugs Conocidos]].
+      //    ⚠️ Fix 2026-08-16: antes esta query re-derivaba el interés desde
+      //    LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / cu.monto_cuota — es decir,
+      //    desde el ESTADO ACTUAL (mutable) de la cuota. Pero en método 'plano',
+      //    recalcularCuotasPlano() reescribe cu.monto_cuota/abono_interes después de
+      //    CADA pago del crédito: cuando una cuota se cierra "solo intereses" (Regla 2),
+      //    el capital se redistribuye entre menos cuotas restantes, INFLANDO el
+      //    monto_cuota de la cuota aún abierta. Como esta fórmula divide entre ese
+      //    monto_cuota inflado, un pago que en realidad fue 100% interés terminaba
+      //    prorrateado a una fracción mínima (caso real verificado: CRED-000309,
+      //    pago de $1.000.000 100% interés mostrado como $130.435 — ver
+      //    [[Incidentes y Bugs Conocidos]]). cred_pagos.monto_interes ya guarda el
+      //    interés real "pactado al momento del cobro" y NO varía con recálculos
+      //    posteriores (mismo campo que ya se usaba, correctamente, para credito_libre
+      //    en la query de abajo) — se usa directo, sin prorratear desde la cuota.
+      //    Ya no hace falta el JOIN a cred_cuotas (solo se usaba para esa fórmula).
       query(`
         SELECT
           COALESCE(SUM(CASE WHEN p.fecha_pago::date = $1
-            THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS hoy,
+            THEN p.monto_interes END), 0) AS hoy,
           COALESCE(SUM(CASE WHEN p.fecha_pago::date >= DATE_TRUNC('week',  $1::date)
-            THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS semana,
+            THEN p.monto_interes END), 0) AS semana,
           COALESCE(SUM(CASE WHEN p.fecha_pago::date >= DATE_TRUNC('month', $1::date)
-            THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS mes,
-          COALESCE(SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)), 0) AS total,
+            THEN p.monto_interes END), 0) AS mes,
+          COALESCE(SUM(p.monto_interes), 0) AS total,
           COALESCE(SUM(CASE WHEN $2::date IS NOT NULL
             AND p.fecha_pago::date BETWEEN $2::date AND $3::date
-            THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END), 0) AS rango
+            THEN p.monto_interes END), 0) AS rango
         FROM ${S}.cred_pagos p
-        JOIN ${S}.cred_cuotas cu ON cu.id = p.cuota_id
         JOIN ${S}.cred_productos prod ON prod.id = p.producto_id
         WHERE prod.tipo != 'credito_libre'
       `, [hoy, desde, hasta]),
