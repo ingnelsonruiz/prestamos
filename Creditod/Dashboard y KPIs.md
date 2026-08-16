@@ -382,6 +382,10 @@ El `HAVING > 0.5` filtra créditos con saldo residual por redondeo que no deber�
 ### `GET /api/dashboard/intereses-detalle`
 Devuelve `{ normales[], libres[], totales }` (formato nuevo; el frontend soporta compatibilidad con el formato viejo vía `detalleIntereses.normales ?? detalleIntereses ?? []`, ver [[API Endpoints]]). `normales` repite la query de interés proyectado de la sección 6 agrupada por crédito, con `filtroRango` opcional sobre `cu.fecha_vencimiento`. `libres` solo se calcula **si hay rango completo** (`desde` y `hasta`), reutilizando la misma lógica `desde → hasta` con 30/360 descrita en la sección 6 — hereda por tanto el mismo riesgo de posible solape con intereses ya cobrados si `desde` antecede al corte real.
 
+### `GET /api/dashboard/intereses-recogidos-detalle/pagos` (agregado 2026-08-16) — drill-down de segundo nivel
+
+A diferencia de los dos anteriores (agregados por crédito), esta ruta responde al **doble clic sobre una fila** del modal "Detalle de intereses recogidos" y devuelve los pagos/retornos individuales (no agregados) que componen el `interes_cobrado` de esa fila puntual. Recibe `tipo` (`normal`/`libre`/`retorno`) + `producto_id` o `empresa_id` + el mismo `desde`/`hasta` activo en el dashboard, y reutiliza sin modificarla la fórmula de prorrateo de la query "normales"/"libres"/"retornos" de `intereses-recogidos-detalle/route.js` — por diseño, `total_interes` de esta respuesta debe coincidir siempre con el `interes_cobrado` de la fila que lo originó. En el frontend (`app/page.js`) abre un sub-modal en capa superior (`z-[60]`) sobre el modal padre (`z-50`). Detalle completo del shape de respuesta en [[API Endpoints]].
+
 ---
 
 ## Resumen de riesgos detectados (⚠️)

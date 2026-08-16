@@ -135,6 +135,12 @@ export default function Dashboard() {
   const [detalleRecogidos, setDetalleRecogidos] = useState(null)
   const [cargandoRecogidos, setCargandoRecogidos] = useState(false)
 
+  // Sub-modal: detalle de pagos individuales de UNA fila del modal de
+  // intereses recogidos (doble clic sobre un crédito/empresa concreto).
+  const [subModalPagos, setSubModalPagos] = useState(null) // { tipo, titulo, subtitulo }
+  const [detalleSubModalPagos, setDetalleSubModalPagos] = useState([])
+  const [cargandoSubModalPagos, setCargandoSubModalPagos] = useState(false)
+
   // Modal detalle capital en la calle
   const [modalCapital, setModalCapital] = useState(false)
   const [detalleCapital, setDetalleCapital] = useState(null)
@@ -164,6 +170,32 @@ export default function Dashboard() {
     setDetalleRecogidos(json)
     setCargandoRecogidos(false)
   }
+
+  // Doble clic sobre una fila (normal/libre/retorno) del modal de intereses
+  // recogidos: abre el sub-modal con los pagos/retornos individuales que
+  // componen el interes_cobrado de esa fila, respetando el mismo rango.
+  const abrirSubModalPagos = async (tipo, fila) => {
+    setSubModalPagos({
+      tipo,
+      titulo: tipo === 'retorno' ? fila.nombre_empresa : fila.nombre_cliente,
+      subtitulo: fila.referencia || (fila.producto_id ? fila.producto_id.slice(0, 8) : null),
+    })
+    setCargandoSubModalPagos(true)
+    setDetalleSubModalPagos([])
+    const params = new URLSearchParams({ tipo })
+    if (tipo === 'retorno') {
+      params.set('empresa_id', fila.empresa_id)
+      if (fila.producto_id) params.set('producto_id', fila.producto_id)
+    } else {
+      params.set('producto_id', fila.producto_id)
+    }
+    if (rango) { params.set('desde', rango.desde); params.set('hasta', rango.hasta) }
+    const res = await fetch(`/api/dashboard/intereses-recogidos-detalle/pagos?${params.toString()}`)
+    const json = await res.json()
+    setDetalleSubModalPagos(json.pagos || [])
+    setCargandoSubModalPagos(false)
+  }
+  const cerrarSubModalPagos = () => { setSubModalPagos(null); setDetalleSubModalPagos([]) }
 
   const abrirDetalleIntereses = async () => {
     setModalIntereses(true)
@@ -635,7 +667,9 @@ export default function Dashboard() {
                             </thead>
                             <tbody>
                               {normales.map(d => (
-                                <tr key={d.producto_id} className="bg-gray-50 hover:bg-amber-50 rounded-lg transition-colors">
+                                <tr key={d.producto_id} className="bg-gray-50 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                                  onDoubleClick={() => abrirSubModalPagos('normal', d)}
+                                  title="Doble clic para ver los pagos individuales">
                                   <td className="px-3 py-2 rounded-l-lg">
                                     <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-amber-700 hover:underline block">{d.nombre_cliente}</a>
                                     <span className="text-[11px] text-gray-400">{d.documento}</span>
@@ -683,7 +717,9 @@ export default function Dashboard() {
                             </thead>
                             <tbody>
                               {libres.map(d => (
-                                <tr key={d.producto_id} className="bg-cyan-50 hover:bg-cyan-100 rounded-lg transition-colors">
+                                <tr key={d.producto_id} className="bg-cyan-50 hover:bg-cyan-100 rounded-lg transition-colors cursor-pointer"
+                                  onDoubleClick={() => abrirSubModalPagos('libre', d)}
+                                  title="Doble clic para ver los pagos individuales">
                                   <td className="px-3 py-2 rounded-l-lg">
                                     <a href={'/clientes/' + d.cliente_id} className="font-semibold text-gray-800 hover:text-cyan-700 hover:underline block">{d.nombre_cliente}</a>
                                     <span className="text-[11px] text-gray-400">{d.documento}</span>
@@ -731,7 +767,9 @@ export default function Dashboard() {
                             </thead>
                             <tbody>
                               {retornos.map(d => (
-                                <tr key={(d.producto_id || 'sin-credito') + '-' + d.empresa_id} className="bg-violet-50 hover:bg-violet-100 rounded-lg transition-colors">
+                                <tr key={(d.producto_id || 'sin-credito') + '-' + d.empresa_id} className="bg-violet-50 hover:bg-violet-100 rounded-lg transition-colors cursor-pointer"
+                                  onDoubleClick={() => abrirSubModalPagos('retorno', d)}
+                                  title="Doble clic para ver los retornos individuales">
                                   <td className="px-3 py-2 rounded-l-lg">
                                     <a href={'/gastos?empresa=' + d.empresa_id} className="font-semibold text-gray-800 hover:text-violet-700 hover:underline block">{d.nombre_empresa}</a>
                                     <span className="text-[11px] text-gray-400">{d.codigo}</span>
@@ -770,6 +808,84 @@ export default function Dashboard() {
                       </span>
                     </div>
                   </>
+                )
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-modal: detalle de pagos individuales de una fila del modal de
+          intereses recogidos (doble clic sobre un crédito/empresa concreto).
+          z-[60] para quedar por encima del modal padre (z-50). */}
+      {subModalPagos && (
+        <div className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) cerrarSubModalPagos() }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b bg-gray-800 rounded-t-2xl">
+              <div>
+                <h3 className="text-white font-bold text-lg">Detalle de pagos — {subModalPagos.titulo}</h3>
+                <p className="text-gray-300 text-xs mt-0.5">
+                  {subModalPagos.subtitulo && <span className="font-mono">{subModalPagos.subtitulo}</span>}
+                  {rango && <span> · {fmtFecha(rango.desde)} al {fmtFecha(rango.hasta)}</span>}
+                  {!rango && <span> · Todos los pagos historicos</span>}
+                </p>
+              </div>
+              <button onClick={cerrarSubModalPagos}
+                className="text-white/80 hover:text-white text-2xl leading-none font-bold px-2">x</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {cargandoSubModalPagos && <div className="text-center text-gray-400 py-12">Cargando...</div>}
+
+              {!cargandoSubModalPagos && detalleSubModalPagos.length === 0 && (
+                <div className="text-center text-gray-400 py-12">Sin pagos individuales en el periodo</div>
+              )}
+
+              {!cargandoSubModalPagos && detalleSubModalPagos.length > 0 && (() => {
+                const esNormal = subModalPagos.tipo === 'normal'
+                const colspanPrevio = esNormal ? 5 : 3   // columnas antes de "Interés"
+                return (
+                  <table className="w-full text-sm border-separate border-spacing-y-1">
+                    <thead>
+                      <tr className="text-xs uppercase tracking-wide text-gray-400">
+                        <th className="text-left px-3 py-2">Recibo</th>
+                        <th className="text-left px-3 py-2">Fecha</th>
+                        {esNormal && <th className="text-center px-3 py-2">Cuota</th>}
+                        {esNormal && <th className="text-right px-3 py-2">Monto cuota</th>}
+                        <th className="text-right px-3 py-2">Monto pagado</th>
+                        <th className="text-right px-3 py-2 text-amber-600">Interés prorrateado</th>
+                        <th className="text-left px-3 py-2">Método</th>
+                        <th className="text-left px-3 py-2 rounded-r-lg">Registró</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detalleSubModalPagos.map(p => (
+                        <tr key={p.id} className="bg-gray-50 rounded-lg">
+                          <td className="px-3 py-2 rounded-l-lg font-mono text-xs">{p.numero_recibo || '-'}</td>
+                          <td className="px-3 py-2 text-xs whitespace-nowrap">
+                            {p.fecha_pago ? new Date(p.fecha_pago.slice(0, 10) + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
+                          </td>
+                          {esNormal && <td className="px-3 py-2 text-center text-gray-600">{p.numero_cuota}</td>}
+                          {esNormal && <td className="px-3 py-2 text-right text-gray-600">{fmt(p.monto_cuota)}</td>}
+                          <td className="px-3 py-2 text-right">{fmt(p.monto_pago)}</td>
+                          <td className="px-3 py-2 text-right font-bold text-amber-600">{fmt(p.interes_prorrateado)}</td>
+                          <td className="px-3 py-2 text-xs capitalize">{p.metodo_pago || '-'}</td>
+                          <td className="px-3 py-2 text-xs rounded-r-lg">{p.usuario_nombre || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={colspanPrevio} className="px-3 pt-2 text-xs font-semibold text-gray-500">
+                          Total interés de este periodo ({detalleSubModalPagos.length} pago{detalleSubModalPagos.length !== 1 ? 's' : ''})
+                        </td>
+                        <td className="px-3 pt-2 text-right font-black text-amber-600">
+                          {fmt(detalleSubModalPagos.reduce((s, p) => s + (p.interes_prorrateado || 0), 0))}
+                        </td>
+                        <td colSpan="2"></td>
+                      </tr>
+                    </tfoot>
+                  </table>
                 )
               })()}
             </div>

@@ -64,6 +64,7 @@ Catálogo completo de los Route Handlers del backend Next.js. Todas las rutas ba
 | GET | `/api/dashboard/capital-detalle` | Desglose de "Capital en la calle" por cliente/crédito (foto del saldo actual, sin filtro de fechas) |
 | GET | `/api/dashboard/intereses-detalle` | Desglose de intereses proyectados. Retorna `{ normales[], libres[], totales }` — ver abajo |
 | GET | `/api/dashboard/intereses-recogidos-detalle` | Desglose de intereses ya cobrados por crédito. Retorna `{ normales[], libres[], totales }` (mismo formato que `intereses-detalle`, corregido 2026-08-05 — ver abajo) |
+| GET | `/api/dashboard/intereses-recogidos-detalle/pagos?tipo=&producto_id=&empresa_id=&desde=&hasta=` | **Agregado 2026-08-16.** Drill-down de UNA fila del modal anterior: pagos/retornos individuales (recibo, fecha, cuota, interés prorrateado) que componen su `interes_cobrado`. Ver abajo |
 
 ### Estructura de respuesta `GET /api/dashboard`
 
@@ -160,6 +161,34 @@ Formato `{ normales[], libres[], retornos[], totales }` — la tercera sección 
 > **Fix (segunda vuelta)**: se agregó una tercera query `retornos` a `intereses-recogidos-detalle/route.js`, replicando exactamente el filtro de fecha (`r.fecha_retorno`, no `pg.fecha_pago`) y la fórmula (`SUM(r.monto_interes)`) de la query 12 del dashboard, agrupada por empresa + crédito asociado. El modal (`app/page.js`) ahora muestra una tercera tabla "🏢 Retornos de empresas propias" con su propio subtotal, y el resumen de 3 columnas pasa a 4 cuando hay retornos en el rango. Con esto `totales.total` del detalle **siempre debe igualar** `intereses.rango` del dashboard para el mismo rango de fechas — si vuelven a divergir, es señal de que una tercera fuente de interés se agregó al dashboard sin replicarse aquí.
 > **De paso (primera vuelta)**: se cambió el `JOIN cred_clientes` a `LEFT JOIN` con fallback a `cred_empresas_propias` (vía `p.empresa_id` cuando `es_prestamo_interno=TRUE`) en `normales`/`libres` — antes un `INNER JOIN` descartaba silenciosamente los intereses cobrados en préstamos internos a empresas propias (`cliente_id NULL` desde la migración 25).
 > **Patrón a vigilar**: cualquier cálculo de interés cobrado/pendiente que dependa de `cred_cuotas.abono_interes` da `0` para `tipo='credito_libre'` — su cuota es solo un placeholder de trazabilidad (ver `Créditos Sin Cuotas Futuras.md`). El interés real de ese tipo siempre debe leerse de `cred_pagos.monto_interes`. Y cualquier vista que agregue "intereses cobrados" a nivel de negocio debe sumar **las tres fuentes** (`cred_cuotas.abono_interes` prorrateado, `cred_pagos.monto_interes` de créditos libres, `cred_retornos_empresa.monto_interes`) — omitir cualquiera reproduce este mismo bug en otro reporte.
+
+### `GET /api/dashboard/intereses-recogidos-detalle/pagos` (agregado 2026-08-16)
+
+Drill-down de una sola fila del modal "Detalle de intereses recogidos". El frontend (`app/page.js`) lo llama al hacer **doble clic sobre una fila** (crédito normal, crédito libre o retorno de empresa) de ese modal, y abre un sub-modal (`subModalPagos`) con el detalle pago-por-pago.
+
+**Query params**: `tipo` (`normal` | `libre` | `retorno`, obligatorio), `producto_id` (obligatorio si `tipo` es `normal`/`libre`), `empresa_id` (obligatorio si `tipo='retorno'`), `desde`/`hasta` (opcionales, mismo rango activo del dashboard).
+
+```js
+// tipo=normal — un registro por recibo, mismo prorrateo que la query "normales"
+{ tipo: 'normal', pagos: [
+  { id, numero_recibo, fecha_pago, numero_cuota, monto_cuota, abono_interes_cuota,
+    monto_pago, interes_prorrateado, estado_cuota, metodo_pago, usuario_nombre, notas }
+], total_interes }
+
+// tipo=libre — interés real siempre de pg.monto_interes (nunca de la cuota placeholder)
+{ tipo: 'libre', pagos: [
+  { id, numero_recibo, fecha_pago, monto_pago, interes_prorrateado, monto_capital,
+    fecha_corte_interes, metodo_pago, usuario_nombre, notas }
+], total_interes }
+
+// tipo=retorno — filas de cred_retornos_empresa, no de cred_pagos
+{ tipo: 'retorno', pagos: [
+  { id, numero_recibo: null, fecha_pago, monto_pago, monto_capital,
+    interes_prorrateado, usuario_nombre, notas }
+], total_interes }
+```
+
+Reutiliza exactamente la misma fórmula de prorrateo de `intereses-recogidos-detalle/route.js` (`LEAST(pg.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota,0)` para `normal`; `pg.monto_interes` directo para `libre`; `r.monto_interes` para `retorno`) — el `total_interes` de esta respuesta **siempre debe coincidir** con `interes_cobrado` de la fila que lo originó en el modal padre. Si un pago de tipo `retorno` no tiene crédito asociado (`producto_id` null en la fila agregada), la query filtra explícitamente `r.producto_id IS NULL` en vez de intentar un match por igualdad que nunca encontraría nada.
 
 ---
 
