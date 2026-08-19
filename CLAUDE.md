@@ -1109,3 +1109,32 @@ Si un cliente no tiene créditos, o un crédito no tiene cuotas/pagos aún, la h
 - Con 373 clientes activos hoy, el archivo genera 374 hojas (373 + Índice). Es manejable pero pesado de abrir en equipos con poca RAM — si la cartera crece significativamente, considerar paginar por fecha o generar el archivo en el servidor en vez de en el navegador.
 - El Excel se genera 100% en el navegador (igual que los demás export de este sistema) — para 373 clientes con miles de cuotas/pagos esto puede tardar unos segundos; no hay barra de progreso, solo el texto del botón ("⏳ Generando Excel...").
 - **Hallazgo de seguridad relacionado, no corregido en este cambio:** al revisar `app/api/backup/route.js` se encontró que la función `verificarAdmin()` (línea ~10) está definida pero **nunca se llama** — ni `GET` (exportar) ni `POST` (restaurar) verifican `rol === 'admin'`, solo que exista un usuario autenticado (`getUsuarioDesdeRequest`). Cualquier usuario con rol `operador` que llame directamente a estos endpoints (sin pasar por el botón de la UI) podría exportar el backup completo (incluye `password_hash` de usuarios) o **restaurar/reemplazar toda la base de datos**. Pendiente de decisión del dueño del sistema: agregar `if (!u?.rol || u.rol !== 'admin') return 403` en ambos handlers.
+
+---
+
+## 27. Fix — "Limpiar cliente específico" falla con FK de `cred_unificaciones` — 2026-08-19
+
+### Síntoma
+
+Desde `/migracion` → Zona de desarrollo → **Limpiar cliente específico**, al intentar borrar varios créditos de un cliente (ej. cliente CC 77159747, 6 de sus 7 créditos, dejando solo `CRED-000777` activo), la operación fallaba con:
+
+```
+update or delete on table "cred_productos" violates foreign key constraint
+"cred_unificaciones_credito_origen_id_fkey" on table "cred_unificaciones"
+```
+
+### Causa raíz
+
+`POST /api/migracion/reset-cliente` (documentado en §6) borra en cascada manual, filtrando siempre por `producto_id`: `cred_movimientos_caja` → `cred_pagos` → `cred_historial_recalculos` → `cred_cuotas` → `cred_productos`. La tabla `cred_unificaciones` (migración `23_unificacion_creditos.sql`, ver §4 y §21) se agregó **después** de que este endpoint ya existía y **nunca se actualizó** para limpiarla también. Esa tabla tiene FK reales (a diferencia de `es_refinanciacion_de`/`refinanciado_por`, que son `TEXT` sin FK) hacia `cred_productos` en **ambas** columnas — `credito_nuevo_id` y `credito_origen_id` — sin `ON DELETE CASCADE`. Cualquier crédito que haya participado en una unificación (como origen consolidado, estado `refinanciado`) no se puede borrar sin antes borrar su(s) fila(s) en `cred_unificaciones`.
+
+**Por qué apareció justo con este cliente:** de sus 7 créditos, varios (`CRED-000654`, `CRED-000653` credito_libre, `CRED-000564`, `CRED-000561`, `CRED-000471`) estaban en estado `refinanciado` — es decir, fueron orígenes de una o más unificaciones — y tenían filas en `cred_unificaciones.credito_origen_id` apuntando a ellos. Al intentar borrarlos, Postgres rechazó el `DELETE` de `cred_productos` por esa FK.
+
+### Fix (`app/api/migracion/reset-cliente/route.js`)
+
+Se agregó, justo antes del `DELETE FROM cred_productos`, un `DELETE FROM cred_unificaciones WHERE credito_nuevo_id IN (...) OR credito_origen_id IN (...)` sobre el mismo array `productoIds` — mismo patrón "filtrar por producto_id, nunca por cliente_id" que ya usa todo el endpoint. Envuelto en `.catch(() => ({ rowCount: 0 }))` para tolerar un ambiente viejo sin la tabla (mismo patrón defensivo que ya usa `GET /api/productos/[id]` para las consultas de `unificado_desde`/`unificado_en`, ver §21). El contador `unificaciones` se agregó a la respuesta JSON y al mensaje de auditoría, junto a `prods`/`cuotas`/`pagos`/`movimientos`/`recalculos`.
+
+**Efecto colateral esperado (correcto, no un bug):** si alguno de los créditos borrados era el `credito_nuevo_id` de una unificación cuyos orígenes **no** se están borrando en la misma operación, esos orígenes quedan con `refinanciado_por` apuntando a un crédito que ya no existe (columna `TEXT` sin FK, así que no truena, pero el dato queda huérfano). Es inherente a que el usuario pidió borrar ese crédito puntual — no hay forma de "recomponer" una unificación después de borrar su resultado.
+
+**Patrón a vigilar:** cualquier tabla nueva que agregue una FK real hacia `cred_productos` (a diferencia de las columnas `TEXT` sueltas como `es_refinanciacion_de`) debe revisarse contra **ambos** endpoints de borrado de créditos — `POST /api/migracion/reset-cliente` y `POST /api/migracion/reset` (borrado masivo) — para agregar su propio `DELETE` previo. `cred_unificaciones` es, a la fecha, la única tabla en ese caso.
+
+**Pendiente de desplegar:** el archivo corregido se entregó y se sincronizó a `C:\programa alberto mario\Programa_Creditos\app\api\migracion\reset-cliente\route.js` — falta el `git commit`/despliegue a Vercel para que tome efecto en producción (este proyecto no tiene hot-reload remoto).

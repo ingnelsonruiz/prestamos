@@ -7,7 +7,7 @@ Archivos cubiertos:
 - `app/api/dashboard/capital-detalle/route.js`
 - `app/api/dashboard/intereses-detalle/route.js`
 
-Ver también [[API Endpoints]] (estructura de respuesta y el endpoint hermano `intereses-recogidos-detalle`, con su bug corregido el 2026-08-05), [[Base de Datos]] (diccionario de columnas), [[Créditos Sin Cuotas Futuras]] (motor 30/360 y reglas del módulo) y [[Empresas y Gastos]] (tabla `cred_retornos_empresa`).
+Ver también [[API Endpoints]] (estructura de respuesta y el endpoint hermano `intereses-recogidos-detalle`, con sus bugs corregidos el 2026-08-05 y el 2026-08-16), [[Base de Datos]] (diccionario de columnas), [[Créditos Sin Cuotas Futuras]] (motor 30/360 y reglas del módulo) y [[Empresas y Gastos]] (tabla `cred_retornos_empresa`).
 
 ---
 
@@ -77,22 +77,26 @@ El JSON final es la **suma en JS** de tres queries SQL completamente separadas �
 
 | Fuente | Query | Por qué es aparte |
 |---|---|---|
-| Préstamos normales (cuotas) | #2 — `cu.abono_interes` vía `cred_pagos` JOIN `cred_cuotas` | Requiere prorratear por sobrepago |
+| Préstamos normales (cuotas) | #2 — `pg.monto_interes` directo desde `cred_pagos` | Ver fix 2026-08-16 abajo — `cred_pagos.monto_interes` ya es el interés real, inmutable |
 | Retornos de empresas propias | #12 — `cred_retornos_empresa.monto_interes` | *"no pasan por `cred_pagos`"* |
-| Créditos Sin Cuotas Futuras | #16 — `cred_pagos.monto_interes` directo | La fórmula de #2 da 0 para estos pagos |
+| Créditos Sin Cuotas Futuras | #16 — `cred_pagos.monto_interes` directo | La fórmula anterior de #2 (basada en `cu.abono_interes`) daba 0 para estos pagos |
 
 **2a. Préstamos normales:**
 
 ```sql
+-- Vigente desde el fix 2026-08-16 (ver más abajo)
 SELECT
   SUM(CASE WHEN p.fecha_pago::date = $1
-    THEN LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) END) AS hoy,
+    THEN p.monto_interes END) AS hoy,
   -- análogos para semana / mes / total / rango
 FROM administrativo.cred_pagos p
-JOIN administrativo.cred_cuotas cu ON cu.id = p.cuota_id
+JOIN administrativo.cred_productos prod ON prod.id = p.producto_id
+WHERE prod.tipo != 'credito_libre'
 ```
 
-Comentario del código: *"`LEAST(p.monto, cu.monto_cuota)` evita sobrecontar en casos de sobrepago"*. La fórmula prorratea el interés de la cuota (`cu.abono_interes`) según qué proporción del `monto_cuota` cubrió ese pago puntual (`p.monto`), capado a 1 (`LEAST`) para que un pago que excede la cuota (sobrepago) no genere más interés del que la cuota realmente tenía asignado. Esta query **no filtra por `p.tipo`** de producto.
+`cred_pagos.monto_interes` es el interés que el backend ya calculó y guardó en el momento exacto del cobro (`app/api/pagos/route.js`, variable `interesAbonado`) — no cambia después, sin importar cuántos pagos posteriores tenga el crédito. Esta query sigue **sin filtrar** `fiado`/`adelanto`/`congelacion` (ver riesgo #2 del resumen al final de la nota), pero sí excluye `credito_libre` desde el fix del 2026-08-05.
+
+> ⚠️➡️✅ **Fix 2026-08-16 — la fórmula anterior prorrateaba desde el ESTADO ACTUAL (mutable) de la cuota, no desde el pago.** Hasta esa fecha la query calculaba `LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)` con un `JOIN cred_cuotas cu ON cu.id = p.cuota_id`. El comentario original decía que `LEAST(...)` *"evita sobrecontar en casos de sobrepago"*, y en efecto lo hace — pero el problema real es otro: en método `plano`, `recalcularCuotasPlano()` (`app/api/pagos/route.js`) **reescribe `cu.monto_cuota`/`cu.abono_interes` después de cada pago del crédito**. Cuando una cuota se cierra "solo intereses" (Regla 2 del pre-filtro: `monto_pagado >= abono_interes`, sin tocar capital), el capital pendiente se redistribuye entre menos cuotas restantes — lo que **infla** el `monto_cuota` de la cuota aún abierta. Como la fórmula divide entre ese `monto_cuota` inflado, un pago que en realidad fue 100% interés terminaba prorrateado a una fracción mínima. Caso real verificado: CRED-000309, pago de $1.000.000 (100% interés, ya guardado así en `cred_pagos.monto_interes`) se mostraba como solo $130.435 en el modal de detalle, tras cerrarse 4 cuotas previas "solo intereses" que redujeron las cuotas restantes de 10 a 6 e inflaron el `monto_cuota` de ~$5.750.000 a ~$8.816.666. **Fix**: usar `pg.monto_interes` directo — mismo patrón que ya se aplicaba, correctamente, a `credito_libre` (2c, abajo). Ya no hace falta el `JOIN cred_cuotas`. Detalle completo en [[Incidentes y Bugs Conocidos]].
 
 **2b. Retornos de empresas propias:**
 
@@ -134,7 +138,7 @@ intereses: {
 >
 > **✅ Corregido (2026-08-05) — variante de este mismo riesgo, confirmada contra la BD real**: la query 2 tampoco excluía `credito_libre`. Se verificaron 11 créditos libres en producción cuya cuota placeholder está mal formada (`abono_interes > 0` real, en vez del `0` fijo esperado — ver [[Créditos Sin Cuotas Futuras]]), causando doble conteo de interés (ya contado también en `intereses_creditos_libres` vía `pg.monto_interes`). Se agregó `JOIN cred_productos` + `WHERE tipo != 'credito_libre'` a la query 2. Detalle completo, impacto medido y lista de créditos afectados en [[Incidentes y Bugs Conocidos]].
 
-El endpoint hermano `GET /api/dashboard/intereses-recogidos-detalle` desglosa estas tres fuentes por crédito individual; su documentación completa (incluye el bug corregido el 2026-08-05 sobre créditos sin cuotas sin corte y retornos de empresa) está en [[API Endpoints]].
+El endpoint hermano `GET /api/dashboard/intereses-recogidos-detalle` desglosa estas tres fuentes por crédito individual; su documentación completa (incluye el bug corregido el 2026-08-05 sobre créditos sin cuotas sin corte y retornos de empresa, y el del 2026-08-16 sobre el prorrateo mutable de `cu.monto_cuota` en préstamos normales) está en [[API Endpoints]].
 
 ---
 
@@ -398,3 +402,4 @@ A diferencia de los dos anteriores (agregados por crédito), esta ruta responde 
 | 4 | Exclusión de `credito_libre` en `capitalCalle` / `interesesProyectados` (queries 6 y 7) — a diferencia de lo que se documentó originalmente, **SÍ es explícita**: ambas hacen `JOIN cred_productos` y filtran `p.estado IN ('activo','al_dia','en_mora')`, por lo que no heredan el bug de las queries 3/5. Verificado al corregir el riesgo #3 | Query 6 y 7 | No es un riesgo real — documentación previa corregida |
 | 5 | `intereses_libres_proyectados` usa `desde` (elegido por el usuario) en vez de `inicio_periodo` (último corte real) como inicio del cálculo 30/360 — puede solaparse con `creditos_libres.intereses_cobrados` si `desde` antecede al último corte real | Sección "capital" (JS, tras query 17) y `intereses-detalle/route.js` | Sin corregir |
 | 6 | 11 créditos `tipo='credito_libre'` en producción tienen la cuota placeholder mal formada (fecha y montos reales en vez de `2099-12-31`/`0`) — causa raíz de los riesgos #2 y #3. Pendiente decidir con el usuario si se resetean los datos | `cred_cuotas` de esos 11 productos (ver lista en [[Incidentes y Bugs Conocidos]]) | **Dato pendiente de decisión** |
+| 7 | La query 2 (intereses de préstamos normales) prorrateaba desde `cu.monto_cuota`/`abono_interes` — mutables, reescritos por `recalcularCuotasPlano()` tras cada pago del crédito en método plano. Un pago 100% interés podía mostrarse como una fracción mínima (caso real: CRED-000309, $1.000.000 mostrado como $130.435) | Query 2 (`interesesPeriodos`), y `normales` de `intereses-recogidos-detalle/route.js` + `.../pagos/route.js` | **✅ Corregido 2026-08-16** — ahora usa `pg.monto_interes` directo |

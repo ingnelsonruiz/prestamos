@@ -46,7 +46,7 @@ export async function POST(request) {
       .map(p => p.referencia)
 
     // Contadores para el reporte
-    let pagos = 0, cuotas = 0, prods = 0, movimientos = 0, recalculos = 0
+    let pagos = 0, cuotas = 0, prods = 0, movimientos = 0, recalculos = 0, unificaciones = 0
 
     // Si el cliente no tiene créditos que borrar, informar sin borrar ni auditar
     if (productoIds.length === 0) {
@@ -87,6 +87,19 @@ export async function POST(request) {
       )
       cuotas = rCuo.rowCount ?? 0
 
+      // cred_unificaciones (migración 23) referencia cred_productos tanto en
+      // credito_nuevo_id como en credito_origen_id sin ON DELETE CASCADE.
+      // Si alguno de los créditos a borrar participó en una unificación (como
+      // origen consolidado o como resultado nuevo), hay que limpiar esas filas
+      // primero o el DELETE de cred_productos revienta con
+      // "violates foreign key constraint cred_unificaciones_credito_origen_id_fkey".
+      const rUni = await query(
+        `DELETE FROM ${S}.cred_unificaciones
+         WHERE credito_nuevo_id IN (${placeholders}) OR credito_origen_id IN (${placeholders})`,
+        productoIds
+      ).catch(() => ({ rowCount: 0 })) // tolera BD sin la tabla (ambientes viejos)
+      unificaciones = rUni.rowCount ?? 0
+
       const rPro = await query(
         `DELETE FROM ${S}.cred_productos WHERE id IN (${placeholders})`,
         productoIds
@@ -98,14 +111,14 @@ export async function POST(request) {
       ...u,
       accion:      'RESET DE CLIENTE ESPECÍFICO',
       modulo:      MODULOS.AUTH,
-      descripcion: `⚠️ ${u.nombre} eliminó ${esSeleccionParcial ? `${prods} crédito(s) (${referenciasBorradas.join(', ')})` : 'TODOS los créditos'} de ${cliente.nombre} (CC ${cliente.documento}): ${prods} préstamo(s), ${cuotas} cuota(s), ${pagos} pago(s), ${movimientos} mov. de caja.`,
-      detalle:     { clienteId, nombre: cliente.nombre, documento: cliente.documento, productoIds, referenciasBorradas, esSeleccionParcial, prods, cuotas, pagos, movimientos, recalculos }
+      descripcion: `⚠️ ${u.nombre} eliminó ${esSeleccionParcial ? `${prods} crédito(s) (${referenciasBorradas.join(', ')})` : 'TODOS los créditos'} de ${cliente.nombre} (CC ${cliente.documento}): ${prods} préstamo(s), ${cuotas} cuota(s), ${pagos} pago(s), ${movimientos} mov. de caja, ${unificaciones} traza(s) de unificación.`,
+      detalle:     { clienteId, nombre: cliente.nombre, documento: cliente.documento, productoIds, referenciasBorradas, esSeleccionParcial, prods, cuotas, pagos, movimientos, recalculos, unificaciones }
     })
 
     return NextResponse.json({
       ok: true,
       cliente: { nombre: cliente.nombre, documento: cliente.documento },
-      eliminado: { prods, cuotas, pagos, movimientos, recalculos }
+      eliminado: { prods, cuotas, pagos, movimientos, recalculos, unificaciones }
     })
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
