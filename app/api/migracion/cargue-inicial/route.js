@@ -45,6 +45,18 @@ export async function POST(request) {
     ])
 
     const { producto = {}, pagos = [] } = body
+
+    // Guardia: "credito_libre" se gestiona exclusivamente desde
+    // /api/creditos-libres, igual que en POST /api/productos (route.js).
+    // Bug real detectado el 2026-08-21 (CRED-000723, ver CLAUDE.md §29): este
+    // endpoint no tenía esta guardia y generarCuotas() (abajo) le crea un
+    // cronograma real de num_cuotas cuotas con fecha_vencimiento real — un
+    // híbrido roto que la UI trata como crédito libre pero cuya única cuota
+    // vence de inmediato en vez del placeholder 2099-12-31, cayendo en mora
+    // sin haber pasado los 30 días de gracia del módulo.
+    if (producto.tipo === 'credito_libre')
+      return NextResponse.json({ error: 'Los créditos sin cuotas futuras deben crearse desde el módulo "Créditos Sin Cuotas Futuras" (/creditos-libres/nuevo), no desde Cargue Inicial.' }, { status: 400 })
+
     const {
       cliente_id, tipo,
       monto_capital, tasa_interes, periodo_tasa, frecuencia_cobro,

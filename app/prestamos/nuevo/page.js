@@ -236,7 +236,18 @@ function NuevoPrestamoContenido() {
     fetch('/api/clientes').then(r=>r.json()).then(d => setClientes(Array.isArray(d) ? d : []))
     fetch('/api/empresas').then(r=>r.json()).then(d => setEmpresas(Array.isArray(d) ? d.filter(e=>e.activo) : []))
     fetch('/api/configuracion/tipos').then(r=>r.json()).then(data => {
-      const activos = Array.isArray(data) ? data.filter(t => t.activo) : []
+      // "credito_libre" (comportamiento sin_cuotas_futuras) NO debe aparecer
+      // aquí: este formulario siempre genera un cronograma real con
+      // generarCuotas() (POST /api/productos ya lo rechaza con 400 si llega
+      // igual, pero ni debería ofrecerse). Bug real detectado el 2026-08-21
+      // (CRED-000723, creado por el mismo problema en Cargue Inicial — ver
+      // CLAUDE.md §29): un crédito libre creado por esta vía queda con una
+      // cuota real vencida el mismo día del desembolso en vez del
+      // placeholder 2099-12-31, cayendo en mora de inmediato. Usar
+      // /creditos-libres/nuevo para dar de alta un crédito libre.
+      const activos = Array.isArray(data)
+        ? data.filter(t => t.activo && t.comportamiento !== 'sin_cuotas_futuras')
+        : []
       setTiposList(activos)
     })
     // Fecha primer pago = hoy + 1 mes por defecto; fecha de desembolso = hoy
@@ -514,6 +525,10 @@ function NuevoPrestamoContenido() {
                     <option key={t.codigo} value={t.codigo}>{t.icono} {t.label}</option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  ¿Es un crédito sin cuotas futuras? Ese tipo no aparece aquí — créalo desde{' '}
+                  <Link href="/creditos-libres/nuevo" className="text-primary-600 underline">Créditos Sin Cuotas → Nuevo</Link>.
+                </p>
               </div>
             )}
 

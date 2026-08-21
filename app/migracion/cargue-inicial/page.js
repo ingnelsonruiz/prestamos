@@ -104,8 +104,18 @@ export default function CargueInicialPage() {
     fetch('/api/clientes').then(r => r.json()).then(d => setClientes(Array.isArray(d) ? d : [])).catch(() => {})
     fetch('/api/configuracion/tipos').then(r => r.json()).then(d => {
       // Solo tipos amortizables (préstamo/venta/empeño). Las cuentas abiertas
-      // (fiado/adelanto) no aplican a un cargue con cronograma de cuotas.
-      const aptos = (Array.isArray(d) ? d : []).filter(t => t.activo && t.comportamiento !== 'cuenta_abierta')
+      // (fiado/adelanto) no aplican a un cargue con cronograma de cuotas, y
+      // "credito_libre" (sin_cuotas_futuras) TAMPOCO aplica aquí — este
+      // formulario siempre genera un cronograma real vía generarCuotas() (ver
+      // POST /api/migracion/cargue-inicial), que no sabe nada del módulo
+      // Créditos Sin Cuotas Futuras. Bug real detectado el 2026-08-21
+      // (CRED-000723, ver CLAUDE.md §29): al elegir "Crédito Sin Cuotas" aquí
+      // se creaba un híbrido roto — tipo='credito_libre' pero con una cuota
+      // real vencida el mismo día del desembolso en vez del placeholder
+      // 2099-12-31, cayendo en mora de inmediato. Para dar de alta un crédito
+      // libre histórico hay que usar /creditos-libres/nuevo.
+      const aptos = (Array.isArray(d) ? d : [])
+        .filter(t => t.activo && t.comportamiento !== 'cuenta_abierta' && t.comportamiento !== 'sin_cuotas_futuras')
       setTipos(aptos)
     }).catch(() => {})
   }, [])
@@ -301,6 +311,10 @@ export default function CargueInicialPage() {
                 value={form.tipo} onChange={e => set('tipo', e.target.value)}>
                 {tipos.map(t => <option key={t.id} value={t.codigo}>{t.icono} {t.label}</option>)}
               </select>
+              <p className="mt-1 text-xs text-gray-500">
+                ¿Es un crédito sin cuotas futuras? Ese tipo no aparece aquí — créalo desde{' '}
+                <Link href="/creditos-libres/nuevo" className="text-primary-600 underline">Créditos Sin Cuotas → Nuevo</Link>.
+              </p>
             </div>
 
             <div>

@@ -569,6 +569,7 @@ Tipo de sistema (`tipo='congelacion'`, `comportamiento='prestamo_normal'`) para 
 | `22_fecha_desembolso.sql` | Columna `cred_productos.fecha_desembolso DATE NULL`. Fecha real de entrega del dinero al cliente, editable por el usuario (distinta de `fecha_creacion`, automática). NULL en créditos anteriores — usar `fecha_creacion::date` como respaldo. Ver §19. |
 | `23_unificacion_creditos.sql` | Tabla `cred_unificaciones` (id, credito_nuevo_id, credito_origen_id, capital_aportado, fecha_creacion). Traza N:1 de qué créditos se consolidaron en un crédito nuevo al usar "Unificar Créditos". Ver §21. |
 | `27_backfill_intereses_liquidacion.sql` | Backfill de datos (no altera esquema) de `cred_pagos.monto_interes`/`monto_capital` en pagos de "LIQUIDACIÓN ANTICIPADA" registrados antes del fix del 2026-08-21 (§28) — ese `INSERT` nunca llenaba esas columnas. Solo corrige el caso no ambiguo (cuotas con un único pago en su vida); deja un reporte de los casos ambiguos para revisión manual. Idempotente. |
+| `28_fix_credito_libre_mal_creado.sql` | Backfill de datos (no altera esquema): normaliza créditos `credito_libre` creados por error desde Cargue Inicial o `/prestamos/nuevo` (cuota con fecha real en vez del placeholder `2099-12-31`) — ver §29. Solo corrige automáticamente los que no tienen ningún pago registrado; deja listados para revisión manual los que ya recibieron pagos. Idempotente. |
 
 > **Convención de mora**: `cred_cuotas.estado` ∈ {`pendiente`,`parcial`,`pagada`}. La **mora NO es un estado almacenado**; se deriva por `fecha_vencimiento < CURRENT_DATE` en cada consulta (Cobros, dashboard, informes, listados de clientes/productos). El cargue inicial fija la mora solo a nivel de **producto** (`estado='en_mora'`), nunca en la cuota. **`cred_productos.estado` tampoco se re-evalúa después de creado** (ningún endpoint lo transiciona a `'en_mora'` salvo el cargue inicial), por lo que ningún filtro o vista debe usar `p.estado === 'en_mora'` para detectar mora real; usar siempre el conteo dinámico `cuotas_mora` que expone `GET /api/productos` (cuotas con `fecha_vencimiento < CURRENT_DATE`, `estado != 'pagada'` y `fecha_vencimiento <> '2099-12-31'`).
 >
@@ -1169,3 +1170,35 @@ El bug **no es exclusivo de créditos libres**: afecta cualquier liquidación an
 **Patrón a vigilar:** cualquier endpoint nuevo que inserte en `cred_pagos` (aparte de `POST /api/pagos` y `POST /api/creditos-libres/[id]/abonar`, que ya lo hacen bien) debe llenar siempre `monto_interes`/`monto_capital`. Cualquier reporte o KPI nuevo que lea esas columnas directamente (en vez de derivarlas de `cred_cuotas`, que es mutable) asumirá, con razón, que están pobladas — como ya le pasó a `intereses-recogidos-detalle` con `liquidar/route.js`.
 
 **Estado: backfill ejecutado y confirmado por Nelson (2026-08-21).** `27_backfill_intereses_liquidacion.sql` se corrió desde el SQL Editor de Supabase (proyecto `HERMANOS_LIÑAN`) — el criterio real resultó ser `monto_interes = 0` / `monto_capital = 0` (columnas con `DEFAULT 0`, no `NULL` como se asumió en la primera versión del script). El diagnóstico encontró 45 pagos de liquidación afectados, todos del caso seguro (`pagos_en_la_cuota = 1`, sin ningún caso ambiguo pendiente de revisión manual); el `UPDATE` los corrigió, verificado puntualmente en `REC-000817` (`CRED-000683`): pasó de `monto_interes=0, monto_capital=0` a `monto_interes=500000, monto_capital=5000000`. **Pendiente:** confirmar el despliegue (`git push`) de `app/api/productos/[id]/liquidar/route.js` — el backfill solo corrigió los datos históricos; sin desplegar el código, la próxima liquidación anticipada volvería a guardar `monto_interes`/`monto_capital` en `0`.
+
+---
+
+## 29. Fix — "credito_libre" se podía crear con cronograma real desde Cargue Inicial y `/prestamos/nuevo` — 2026-08-21
+
+### Síntoma
+
+`CRED-000723` (cliente Carlos Alfonso Jimenes, `credito_libre`, desembolsado 2026-08-10) aparecía marcado **"en mora"** en `/clientes` (badge y contador de la pestaña) y en `/clientes/[id]` (banner "⚠️ Con mora" y "⚠️ 1 en mora" en la tarjeta del crédito) apenas 11 días después del desembolso — violando la regla documentada en §18/§24: un crédito libre nunca debería considerarse vencido antes de 30 días desde el desembolso.
+
+### Causa raíz
+
+Verificado en producción: la cuota de ese crédito tenía `fecha_vencimiento = 2026-08-10` (el mismo día del desembolso) y `abono_interes = 150000` ya precalculado (`$1.500.000 × 10%`) — **no** el placeholder `fecha_vencimiento='2099-12-31'` / `abono_interes=0` que usa el módulo real (§18). Es decir, esta cuota se generó con el motor normal de amortización (`generarCuotas()`, `lib/calculos.js`) como si fuera un préstamo `plano` a 1 cuota, no con la lógica de `POST /api/creditos-libres`.
+
+`credito_libre` es un tipo más dentro de `cred_tipos_prestamo` (comportamiento `sin_cuotas_futuras`), y **dos formularios genéricos lo ofrecían como opción seleccionable sin saber tratarlo**:
+- **`app/migracion/cargue-inicial/page.js`**: su fetch de tipos solo excluía `comportamiento === 'cuenta_abierta'` (fiado/adelanto), no `sin_cuotas_futuras`. Su backend, **`POST /api/migracion/cargue-inicial`** (`app/api/migracion/cargue-inicial/route.js`), no tenía ninguna guardia y llamaba a `generarCuotas()` incondicionalmente con el `tipo` que llegara — a diferencia de `POST /api/productos`, que **sí** ya rechazaba `tipo==='credito_libre'` con 400 desde antes (línea 62 de `route.js`, guardia preexistente que funcionó correctamente y por eso este bug nunca ocurrió por esa vía).
+- **`app/prestamos/nuevo/page.js`**: su fetch de tipos no excluía ningún comportamiento — mostraba `credito_libre` en el desplegable "Tipo" igual que cualquier préstamo normal. Si alguien lo hubiera elegido ahí, `POST /api/productos` lo habría rechazado (por la guardia ya existente) — pero el formulario ni siquiera debería ofrecer la opción para no confundir al usuario con un error después de llenar todo el formulario.
+
+El caso real (`CRED-000723`) se originó por la vía de **Cargue Inicial**, la única de las dos que carecía tanto del filtro en el frontend como de la guardia en el backend.
+
+### Fix
+
+- `app/migracion/cargue-inicial/page.js`: el filtro de tipos ahora excluye también `comportamiento === 'sin_cuotas_futuras'`; se agregó un aviso con enlace a `/creditos-libres/nuevo` bajo el selector de Tipo.
+- `app/api/migracion/cargue-inicial/route.js`: se agregó la misma guardia que ya tenía `POST /api/productos` — rechaza `producto.tipo === 'credito_libre'` con 400 antes de tocar `generarCuotas()`.
+- `app/prestamos/nuevo/page.js`: el filtro de tipos ahora excluye `comportamiento === 'sin_cuotas_futuras'`; mismo aviso con enlace a `/creditos-libres/nuevo` bajo el selector de Tipo. (El backend, `POST /api/productos`, no requirió cambios — su guardia ya existía.)
+
+### Backfill de créditos ya mal creados
+
+`28_fix_credito_libre_mal_creado.sql`: busca todo `credito_libre` cuya cuota no tenga `fecha_vencimiento='2099-12-31'` y normaliza automáticamente **solo** los que no tienen ningún pago registrado (`monto_pagado=0` en su única cuota) — reemplaza la cuota "de mentiras" por el placeholder correcto (`fecha_vencimiento='2099-12-31'`, `abono_interes=0`, `monto_cuota`/`abono_capital`/`saldo_pendiente = monto_capital`) y fuerza `con_interes=FALSE` en el producto. Si algún crédito libre mal creado **ya recibió pagos** por la vía normal (`POST /api/pagos`, en vez de `POST /api/creditos-libres/[id]/abonar`), no se toca automáticamente — mezclar los dos sistemas de pago requiere decidir caso por caso cómo migrar ese historial, y queda listado en el reporte del script para revisión manual.
+
+**Patrón a vigilar:** cualquier tipo de `cred_tipos_prestamo` con `comportamiento` distinto de `prestamo_normal`/`cuenta_abierta`/`empeno` (hoy solo `sin_cuotas_futuras`) tiene un módulo de creación **propio** y **no debe** ofrecerse en ningún formulario genérico de creación de crédito, ni aceptarse en ningún endpoint que use `generarCuotas()` — replicar la guardia de `POST /api/productos` en cualquier endpoint nuevo que cree créditos a partir de un `tipo` arbitrario.
+
+**Estado: código corregido el 2026-08-21 — pendiente desplegar (`git push`) y correr `28_fix_credito_libre_mal_creado.sql` en producción** para confirmar cuántos créditos están afectados y corregir los que no tengan pagos.
