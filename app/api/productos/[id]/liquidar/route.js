@@ -150,12 +150,22 @@ export async function POST(request, { params }) {
       )
 
       // 4. Registrar el pago de la liquidación
+      // Incluye monto_interes/monto_capital (fix 2026-08-21 — ver CLAUDE.md §28):
+      // antes este INSERT no las llenaba, y el widget de dashboard "Detalle de
+      // intereses recogidos" (app/api/dashboard/intereses-recogidos-detalle)
+      // exige pg.monto_interes > 0 para créditos libres (y las suma para todos
+      // los demás), así que toda liquidación anticipada desaparecía de ese
+      // reporte pese a haber cobrado interés real. Se usa el mismo desglose ya
+      // calculado arriba y persistido en cred_cuotas (capitalCuotaRef/interesCuotaRef)
+      // — no se recalcula nada nuevo, solo se replica en el pago.
       await q(
         `INSERT INTO ${S}.cred_pagos
-          (id, cuota_id, producto_id, cliente_id, monto, fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          (id, cuota_id, producto_id, cliente_id, monto, monto_interes, monto_capital,
+           fecha_pago, metodo_pago, notas, numero_recibo, usuario_nombre)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [pagoId, cuotaRef.id, id, prod.cliente_id,
-         montoAcordado, fechaReal, metodo_pago || 'efectivo', notaPago, numRecibo, u.nombre]
+         montoAcordado, interesCuotaRef, capitalCuotaRef,
+         fechaReal, metodo_pago || 'efectivo', notaPago, numRecibo, u.nombre]
       )
 
       // 5. Saldar el producto
