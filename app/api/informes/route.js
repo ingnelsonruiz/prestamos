@@ -11,15 +11,24 @@ export async function GET(request) {
     const tipo   = searchParams.get('tipo') || 'intereses'
 
     if (tipo === 'intereses') {
-      // Intereses cobrados por período
+      // Intereses cobrados por período.
+      // Fix 2026-09-07: antes se re-derivaba el interés desde el ESTADO ACTUAL
+      // (mutable) de cred_cuotas — LEAST(p.monto, cu.monto_cuota) * cu.abono_interes
+      // / cu.monto_cuota. En método 'plano', recalcularCuotasPlano() reescribe
+      // monto_cuota/abono_interes tras CADA pago, inflando el monto_cuota de
+      // cuotas aún abiertas y sub-valorando pagos que fueron 100% interés (mismo
+      // bug ya corregido en /api/dashboard el 2026-08-16, caso real CRED-000309:
+      // pago de $1.000.000 100% interés mostrado como $130.435). cred_pagos.monto_interes
+      // ya guarda el interés real pactado al momento del cobro y no varía con
+      // recálculos posteriores — se usa directo, igual que en el Dashboard.
       const resumen = await query(`
         SELECT
           DATE_TRUNC('month', p.fecha_pago)::date          AS mes,
           COUNT(DISTINCT p.id)                              AS num_pagos,
           COUNT(DISTINCT p.cliente_id)                      AS num_clientes,
           SUM(p.monto)                                      AS total_recaudado,
-          SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS intereses_estimados,
-          SUM(p.monto) - SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS capital_recuperado
+          SUM(p.monto_interes) AS intereses_estimados,
+          SUM(p.monto) - SUM(p.monto_interes) AS capital_recuperado
         FROM ${S}.cred_pagos p
         JOIN ${S}.cred_cuotas cu ON cu.id = p.cuota_id
         WHERE p.fecha_pago::date BETWEEN $1 AND $2
@@ -37,8 +46,8 @@ export async function GET(request) {
           pr.descripcion_bien,
           cu.numero_cuota,
           p.monto                               AS total_pago,
-          LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) AS interes_cobrado,
-          p.monto - LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0) AS capital_cobrado,
+          p.monto_interes AS interes_cobrado,
+          p.monto - p.monto_interes AS capital_cobrado,
           p.metodo_pago,
           p.usuario_nombre                      AS registrado_por,
           p.notas
@@ -55,8 +64,8 @@ export async function GET(request) {
           COUNT(DISTINCT p.id)                              AS num_pagos,
           COUNT(DISTINCT p.cliente_id)                      AS num_clientes,
           SUM(p.monto)                                      AS total_recaudado,
-          SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS total_intereses,
-          SUM(p.monto) - SUM(LEAST(p.monto, cu.monto_cuota) * cu.abono_interes / NULLIF(cu.monto_cuota, 0)) AS total_capital
+          SUM(p.monto_interes) AS total_intereses,
+          SUM(p.monto) - SUM(p.monto_interes) AS total_capital
         FROM ${S}.cred_pagos p
         JOIN ${S}.cred_cuotas cu ON cu.id = p.cuota_id
         WHERE p.fecha_pago::date BETWEEN $1 AND $2
