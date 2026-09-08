@@ -59,7 +59,7 @@ export default function InformesPage() {
     const mesData = [
       ['Mes', 'Pagos', 'Clientes', 'Total recaudado', 'Intereses', 'Capital'],
       ...data.resumen_mensual.map(r => [
-        new Date(r.mes).toLocaleDateString('es-CO',{year:'numeric',month:'long'}),
+        new Date(r.mes.split("T")[0]+"T12:00:00").toLocaleDateString('es-CO',{year:'numeric',month:'long'}),
         parseInt(r.num_pagos),
         parseInt(r.num_clientes),
         parseFloat(r.total_recaudado||0),
@@ -203,7 +203,7 @@ export default function InformesPage() {
                     {data.resumen_mensual.map((r,i) => (
                       <tr key={i} className="hover:bg-gray-50">
                         <td className="px-4 py-2.5 font-medium capitalize">
-                          {new Date(r.mes).toLocaleDateString('es-CO',{year:'numeric',month:'long'})}
+                          {new Date(r.mes.split("T")[0]+"T12:00:00").toLocaleDateString('es-CO',{year:'numeric',month:'long'})}
                         </td>
                         <td className="px-4 py-2.5 text-right text-gray-500">{r.num_pagos}</td>
                         <td className="px-4 py-2.5 text-right text-gray-500">{r.num_clientes}</td>
